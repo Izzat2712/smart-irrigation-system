@@ -10,6 +10,7 @@ const firebaseConfig = {
   storageBucket: "smart-irrigation-system-4b76d.firebasestorage.app",
   messagingSenderId: "410863322065",
   appId: "1:410863322065:web:ba31e6831bd406804556f0",
+  measurementId: "G-XND4ZLZGLD"
 };
 
 const app = initializeApp(firebaseConfig);

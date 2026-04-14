@@ -1,11 +1,12 @@
 :root {
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: "Segoe UI Variable", "Aptos", "Trebuchet MS", sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: #173322;
   background:
-    radial-gradient(circle at top, rgba(115, 194, 134, 0.2), transparent 32%),
-    linear-gradient(180deg, #eef8f0 0%, #e5f0e8 52%, #dfece3 100%);
+    radial-gradient(circle at top left, rgba(103, 190, 132, 0.2), transparent 28%),
+    radial-gradient(circle at top right, rgba(64, 125, 213, 0.12), transparent 24%),
+    linear-gradient(180deg, #eef6f1 0%, #e4efe7 48%, #dce9e0 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -25,6 +26,11 @@ body,
 
 body {
   min-width: 320px;
+  background: transparent;
+}
+
+a {
+  color: inherit;
 }
 
 button,
