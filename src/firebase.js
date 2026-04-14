@@ -3,14 +3,14 @@ import { getAuth } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 
 const firebaseConfig = {
-  apiKey: "REDACTED_API_KEY",
-  authDomain: "smart-irrigation-system-4b76d.firebaseapp.com",
-  databaseURL: "https://smart-irrigation-system-4b76d-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "smart-irrigation-system-4b76d",
-  storageBucket: "smart-irrigation-system-4b76d.firebasestorage.app",
-  messagingSenderId: "410863322065",
-  appId: "1:410863322065:web:ba31e6831bd406804556f0",
-  measurementId: "G-XND4ZLZGLD"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 const app = initializeApp(firebaseConfig);
