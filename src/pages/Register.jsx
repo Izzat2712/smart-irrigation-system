@@ -2,27 +2,39 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
+import { getFirebaseAuthErrorMessage } from "../authErrors";
 
-function Register() {
+function Register({ onLocalDevLogin }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [canUseLocalDev, setCanUseLocalDev] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async (event) => {
     event.preventDefault();
     setError("");
+    setCanUseLocalDev(false);
     setLoading(true);
 
     try {
       await createUserWithEmailAndPassword(auth, email, password);
       navigate("/dashboard");
     } catch (firebaseError) {
-      setError(firebaseError.message);
+      setError(getFirebaseAuthErrorMessage(firebaseError));
+      setCanUseLocalDev(
+        import.meta.env.DEV &&
+          firebaseError?.code?.includes("requests-from-referer"),
+      );
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLocalDevLogin = () => {
+    onLocalDevLogin();
+    navigate("/dashboard");
   };
 
   return (
@@ -71,6 +83,16 @@ function Register() {
             {loading ? "Creating account..." : "Register"}
           </button>
         </form>
+
+        {canUseLocalDev && (
+          <button
+            className="secondary-button auth-dev-button"
+            type="button"
+            onClick={handleLocalDevLogin}
+          >
+            Continue locally
+          </button>
+        )}
 
         <p className="auth-footer">
           Already have an account?{" "}

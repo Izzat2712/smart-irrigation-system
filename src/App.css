@@ -250,6 +250,10 @@
   right: 0;
 }
 
+.auth-dev-button {
+  margin-top: 14px;
+}
+
 .error-text {
   margin: 0;
   padding: 14px 16px;

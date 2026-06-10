@@ -7,6 +7,15 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import "./App.css";
 
+const localDevUser = {
+  email: "local-dev@smart-irrigation.test",
+  isLocalDev: true,
+};
+
+function isLocalDevSessionEnabled() {
+  return import.meta.env.DEV && localStorage.getItem("localDevAuth") === "true";
+}
+
 function ProtectedRoute({ user, loading, children }) {
   if (loading) {
     return (
@@ -44,17 +53,29 @@ function PublicRoute({ user, loading, children }) {
 }
 
 function App() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() =>
+    isLocalDevSessionEnabled() ? localDevUser : null,
+  );
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+      setUser(currentUser || (isLocalDevSessionEnabled() ? localDevUser : null));
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
+
+  const handleLocalDevLogin = () => {
+    localStorage.setItem("localDevAuth", "true");
+    setUser(localDevUser);
+  };
+
+  const handleLocalDevLogout = () => {
+    localStorage.removeItem("localDevAuth");
+    setUser(null);
+  };
 
   return (
     <Routes>
@@ -66,7 +87,7 @@ function App() {
         path="/login"
         element={
           <PublicRoute user={user} loading={loading}>
-            <Login />
+            <Login onLocalDevLogin={handleLocalDevLogin} />
           </PublicRoute>
         }
       />
@@ -74,7 +95,7 @@ function App() {
         path="/register"
         element={
           <PublicRoute user={user} loading={loading}>
-            <Register />
+            <Register onLocalDevLogin={handleLocalDevLogin} />
           </PublicRoute>
         }
       />
@@ -82,7 +103,7 @@ function App() {
         path="/dashboard"
         element={
           <ProtectedRoute user={user} loading={loading}>
-            <Dashboard user={user} />
+            <Dashboard user={user} onLocalDevLogout={handleLocalDevLogout} />
           </ProtectedRoute>
         }
       />

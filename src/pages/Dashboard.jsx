@@ -4,7 +4,7 @@ import { signOut } from "firebase/auth";
 import { onValue, ref, set } from "firebase/database";
 import { auth, db } from "../firebase";
 
-function Dashboard({ user }) {
+function Dashboard({ user, onLocalDevLogout }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [sensorData, setSensorData] = useState(null);
@@ -21,6 +21,15 @@ function Dashboard({ user }) {
     const modeRef = ref(db, "device1/control/mode");
     const historyRef = ref(db, "device1/history");
 
+    const getSortableTimestamp = (timestamp) => {
+      if (typeof timestamp === "number") {
+        return timestamp >= 946684800000 ? timestamp : 0;
+      }
+
+      const parsed = new Date(timestamp || 0).getTime();
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+
     const normalizeHistory = (data) => {
       if (!data) {
         return [];
@@ -32,11 +41,15 @@ function Dashboard({ user }) {
           ...value,
         }))
         .sort((a, b) => {
-          const firstTime = new Date(b.timestamp || 0).getTime();
-          const secondTime = new Date(a.timestamp || 0).getTime();
-          return firstTime - secondTime;
-        })
-        .slice(0, 5);
+          const firstTime = getSortableTimestamp(b.timestamp);
+          const secondTime = getSortableTimestamp(a.timestamp);
+
+          if (firstTime !== secondTime) {
+            return firstTime - secondTime;
+          }
+
+          return b.id.localeCompare(a.id);
+        });
     };
 
     const unsubscribeSensor = onValue(sensorRef, (snapshot) => {
@@ -100,7 +113,12 @@ function Dashboard({ user }) {
     setLoading(true);
 
     try {
-      await signOut(auth);
+      if (user?.isLocalDev) {
+        onLocalDevLogout();
+      } else {
+        await signOut(auth);
+      }
+
       navigate("/login");
     } catch (error) {
       console.error("Logout failed:", error);
@@ -195,9 +213,42 @@ function Dashboard({ user }) {
     pumpStatus,
   ]);
 
+  const isLegacyUptimeTimestamp = (timestamp) =>
+    typeof timestamp === "number" && timestamp > 0 && timestamp < 946684800000;
+
+  const formatUptime = (timestamp) => {
+    const totalSeconds = Math.floor(timestamp / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts = [
+      days ? `${days}d` : null,
+      hours ? `${hours}h` : null,
+      minutes ? `${minutes}m` : null,
+      !days && !hours && !minutes ? `${seconds}s` : null,
+    ].filter(Boolean);
+
+    return `Uptime ${parts.join(" ")}`;
+  };
+
+  const formatDateTime = (date) =>
+    date.toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
   const formatTimestamp = (timestamp) => {
     if (!timestamp) {
       return "--";
+    }
+
+    if (isLegacyUptimeTimestamp(timestamp)) {
+      return formatUptime(timestamp);
     }
 
     const date = new Date(timestamp);
@@ -206,7 +257,7 @@ function Dashboard({ user }) {
       return timestamp;
     }
 
-    return date.toLocaleString();
+    return formatDateTime(date);
   };
 
   const formatRecommendation = (value) => {
@@ -447,11 +498,11 @@ function Dashboard({ user }) {
             <div>
               <h2 className="section-title">History</h2>
               <p className="section-kicker">
-                Most recent records from `device1/history`.
+                All records from `device1/history`.
               </p>
             </div>
             <span className="status-pill">
-              {historyRecords.length} recent{" "}
+              {historyRecords.length} total{" "}
               {historyRecords.length === 1 ? "record" : "records"}
             </span>
           </div>
@@ -461,7 +512,9 @@ function Dashboard({ user }) {
               {historyRecords.map((record) => (
                 <div className="info-panel" key={record.id}>
                   <p className="panel-label">Timestamp</p>
-                  <p className="panel-value">{formatTimestamp(record.timestamp)}</p>
+                  <p className="panel-value">
+                    {formatTimestamp(record.timestamp)}
+                  </p>
 
                   <div className="history-meta">
                     <div>

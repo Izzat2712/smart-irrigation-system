@@ -6,36 +6,31 @@ import {
   signInWithPopup,
 } from "firebase/auth";
 import { auth } from "../firebase";
+import { getFirebaseAuthErrorMessage } from "../authErrors";
 
-function Login() {
+function Login({ onLocalDevLogin }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [canUseLocalDev, setCanUseLocalDev] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const getFirebaseErrorMessage = (code) => {
-    switch (code) {
-      case "auth/invalid-credential":
-      case "auth/wrong-password":
-        return "Wrong password. Please try again.";
-      case "auth/user-not-found":
-        return "User not found. Please check your email.";
-      default:
-        return "Login failed. Please try again.";
-    }
-  };
 
   const handleLogin = async (event) => {
     event.preventDefault();
     setError("");
+    setCanUseLocalDev(false);
     setLoading(true);
 
     try {
       await signInWithEmailAndPassword(auth, email, password);
       navigate("/dashboard");
     } catch (firebaseError) {
-      setError(getFirebaseErrorMessage(firebaseError.code));
+      setError(getFirebaseAuthErrorMessage(firebaseError));
+      setCanUseLocalDev(
+        import.meta.env.DEV &&
+          firebaseError?.code?.includes("requests-from-referer"),
+      );
     } finally {
       setLoading(false);
     }
@@ -43,6 +38,7 @@ function Login() {
 
   const handleGoogleLogin = async () => {
     setError("");
+    setCanUseLocalDev(false);
     setLoading(true);
 
     try {
@@ -50,10 +46,19 @@ function Login() {
       await signInWithPopup(auth, provider);
       navigate("/dashboard");
     } catch (firebaseError) {
-      setError(getFirebaseErrorMessage(firebaseError.code));
+      setError(getFirebaseAuthErrorMessage(firebaseError));
+      setCanUseLocalDev(
+        import.meta.env.DEV &&
+          firebaseError?.code?.includes("requests-from-referer"),
+      );
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLocalDevLogin = () => {
+    onLocalDevLogin();
+    navigate("/dashboard");
   };
 
   return (
@@ -102,6 +107,16 @@ function Login() {
             {loading ? "Logging in..." : "Login"}
           </button>
         </form>
+
+        {canUseLocalDev && (
+          <button
+            className="secondary-button auth-dev-button"
+            type="button"
+            onClick={handleLocalDevLogin}
+          >
+            Continue locally
+          </button>
+        )}
 
         <p className="divider-text">or</p>
 
