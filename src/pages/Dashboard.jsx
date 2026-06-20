@@ -13,6 +13,9 @@ function Dashboard({ user, onLocalDevLogout }) {
   const [controlMode, setControlMode] = useState("MANUAL");
   const [pumpLoading, setPumpLoading] = useState(false);
   const [historyRecords, setHistoryRecords] = useState([]);
+  const [activeHistoryTab, setActiveHistoryTab] = useState("records");
+  const [selectedHistoryDay, setSelectedHistoryDay] = useState(1);
+  const [selectedGraphType, setSelectedGraphType] = useState("pump");
 
   useEffect(() => {
     const sensorRef = ref(db, "device1/sensorData");
@@ -23,7 +26,7 @@ function Dashboard({ user, onLocalDevLogout }) {
 
     const getSortableTimestamp = (timestamp) => {
       if (typeof timestamp === "number") {
-        return timestamp >= 946684800000 ? timestamp : 0;
+        return timestamp > 0 ? timestamp : 0;
       }
 
       const parsed = new Date(timestamp || 0).getTime();
@@ -131,10 +134,28 @@ function Dashboard({ user, onLocalDevLogout }) {
     return Number.isNaN(parsed) ? null : parsed;
   };
 
-  const airTemp = toNumberOrNull(sensorData?.airTemp);
-  const leafTemp = toNumberOrNull(sensorData?.leafTemp);
-  const soilMoisture = toNumberOrNull(sensorData?.soilMoisture);
-  const light = typeof sensorData?.light === "string" ? sensorData.light : null;
+  const getComparableTimestamp = (timestamp) => {
+    if (typeof timestamp === "number") {
+      return timestamp > 0 ? timestamp : 0;
+    }
+
+    const parsed = new Date(timestamp || 0).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+
+  const latestHistoryRecord = historyRecords[0] || null;
+  const displaySensorData =
+    latestHistoryRecord &&
+    getComparableTimestamp(latestHistoryRecord.timestamp) >
+      getComparableTimestamp(sensorData?.timestamp)
+      ? latestHistoryRecord
+      : sensorData;
+
+  const airTemp = toNumberOrNull(displaySensorData?.airTemp);
+  const leafTemp = toNumberOrNull(displaySensorData?.leafTemp);
+  const soilMoisture = toNumberOrNull(displaySensorData?.soilMoisture);
+  const light =
+    typeof displaySensorData?.light === "string" ? displaySensorData.light : null;
 
   const hasDecisionInputs =
     airTemp !== null &&
@@ -145,6 +166,11 @@ function Dashboard({ user, onLocalDevLogout }) {
   const calculatedDeltaT = hasDecisionInputs ? leafTemp - airTemp : null;
   const isHighDeltaT = calculatedDeltaT !== null ? calculatedDeltaT >= 3 : false;
   const isLowSoilMoisture = soilMoisture !== null ? soilMoisture < 40 : false;
+  const normalizedLight = light?.toUpperCase();
+  const isNightLight = normalizedLight === "NIGHT";
+  const isDayLight = ["DAY", "LOW_LIGHT", "BRIGHT", "STRONG_DAYLIGHT"].includes(
+    normalizedLight
+  );
 
   let calculatedPlantStatus = "--";
   let calculatedRecommendation = "WAITING_FOR_SENSOR_DATA";
@@ -152,9 +178,9 @@ function Dashboard({ user, onLocalDevLogout }) {
   if (hasDecisionInputs) {
     calculatedPlantStatus = isHighDeltaT ? "Stressed" : "Healthy";
 
-    if (isHighDeltaT && isLowSoilMoisture && light === "NIGHT") {
+    if (isHighDeltaT && isLowSoilMoisture && isNightLight) {
       calculatedRecommendation = "WATER_NOW";
-    } else if (isHighDeltaT && isLowSoilMoisture && light === "DAY") {
+    } else if (isHighDeltaT && isLowSoilMoisture && isDayLight) {
       calculatedRecommendation = "WAIT_UNTIL_NIGHT";
     } else if (isHighDeltaT && !isLowSoilMoisture) {
       calculatedRecommendation = "DO_NOT_IRRIGATE";
@@ -216,22 +242,6 @@ function Dashboard({ user, onLocalDevLogout }) {
   const isLegacyUptimeTimestamp = (timestamp) =>
     typeof timestamp === "number" && timestamp > 0 && timestamp < 946684800000;
 
-  const formatUptime = (timestamp) => {
-    const totalSeconds = Math.floor(timestamp / 1000);
-    const days = Math.floor(totalSeconds / 86400);
-    const hours = Math.floor((totalSeconds % 86400) / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const parts = [
-      days ? `${days}d` : null,
-      hours ? `${hours}h` : null,
-      minutes ? `${minutes}m` : null,
-      !days && !hours && !minutes ? `${seconds}s` : null,
-    ].filter(Boolean);
-
-    return `Uptime ${parts.join(" ")}`;
-  };
-
   const formatDateTime = (date) =>
     date.toLocaleString("en-GB", {
       day: "2-digit",
@@ -242,13 +252,32 @@ function Dashboard({ user, onLocalDevLogout }) {
       second: "2-digit",
     });
 
+  const knownUptimeTimestamps = [
+    sensorData?.timestamp,
+    ...historyRecords.map((record) => record.timestamp),
+  ].filter(isLegacyUptimeTimestamp);
+
+  const latestKnownUptime =
+    knownUptimeTimestamps.length > 0 ? Math.max(...knownUptimeTimestamps) : null;
+
+  const formatEstimatedTimestamp = (timestamp) => {
+    if (!latestKnownUptime) {
+      return `Estimated ${formatDateTime(new Date())}`;
+    }
+
+    const deviceBootEstimate = Date.now() - latestKnownUptime;
+    const estimatedDate = new Date(deviceBootEstimate + timestamp);
+
+    return `Estimated ${formatDateTime(estimatedDate)}`;
+  };
+
   const formatTimestamp = (timestamp) => {
     if (!timestamp) {
       return "--";
     }
 
     if (isLegacyUptimeTimestamp(timestamp)) {
-      return formatUptime(timestamp);
+      return formatEstimatedTimestamp(timestamp);
     }
 
     const date = new Date(timestamp);
@@ -269,6 +298,387 @@ function Dashboard({ user, onLocalDevLogout }) {
       .split("_")
       .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
       .join(" ");
+  };
+
+  const dayTabs = [
+    { value: 1, label: "Monday", offset: 0 },
+    { value: 2, label: "Tuesday", offset: 1 },
+    { value: 3, label: "Wednesday", offset: 2 },
+    { value: 4, label: "Thursday", offset: 3 },
+    { value: 5, label: "Friday", offset: 4 },
+    { value: 6, label: "Saturday", offset: 5 },
+    { value: 0, label: "Sunday", offset: 6 },
+  ];
+
+  const graphTypes = [
+    { value: "pump", label: "Pump Activity" },
+    { value: "soilMoisture", label: "Soil Moisture" },
+    { value: "leafTemp", label: "Leaf Temperature" },
+    { value: "deltaT", label: "Delta T" },
+  ];
+
+  const getRecordDate = (timestamp) => {
+    if (!timestamp || isLegacyUptimeTimestamp(timestamp)) {
+      return null;
+    }
+
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const getHistoryWindowBaseDate = (date) => {
+    const shiftedDate = new Date(date);
+    shiftedDate.setHours(shiftedDate.getHours() - 8);
+    return shiftedDate;
+  };
+
+  const getHistoryWindowHour = (date) => {
+    const hour = date.getHours() + date.getMinutes() / 60;
+    return hour >= 8 ? hour - 8 : hour + 16;
+  };
+
+  const addDays = (date, days) => {
+    const nextDate = new Date(date);
+    nextDate.setDate(nextDate.getDate() + days);
+    return nextDate;
+  };
+
+  const getWeekStart = (date) => {
+    const baseDate = getHistoryWindowBaseDate(date);
+    const mondayOffset = (baseDate.getDay() + 6) % 7;
+    const weekStart = addDays(baseDate, -mondayOffset);
+    weekStart.setHours(8, 0, 0, 0);
+    return weekStart;
+  };
+
+  const formatShortDate = (date) =>
+    date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+    });
+
+  const formatWindowDateTime = (date) =>
+    date.toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const getRecordPumpValue = (record) => {
+    const value = String(
+      record.pump ?? record.pumpStatus ?? record.controlPump ?? ""
+    ).toUpperCase();
+
+    if (value === "ON" || value === "1" || value === "TRUE") {
+      return 1;
+    }
+
+    if (value === "OFF" || value === "0" || value === "FALSE") {
+      return 0;
+    }
+
+    return null;
+  };
+
+  const getRecordMode = (record) =>
+    record.mode ?? record.controlMode ?? record.pumpMode ?? record.irrigationMode ?? null;
+
+  const getRecordDeltaT = (record) => {
+    const savedDeltaT = toNumberOrNull(record.deltaT);
+
+    if (savedDeltaT !== null) {
+      return savedDeltaT;
+    }
+
+    const recordLeafTemp = toNumberOrNull(record.leafTemp);
+    const recordAirTemp = toNumberOrNull(record.airTemp);
+
+    if (recordLeafTemp === null || recordAirTemp === null) {
+      return null;
+    }
+
+    return recordLeafTemp - recordAirTemp;
+  };
+
+  const getGraphValue = (record, graphType) => {
+    if (graphType === "pump") {
+      return getRecordPumpValue(record);
+    }
+
+    if (graphType === "deltaT") {
+      return getRecordDeltaT(record);
+    }
+
+    return toNumberOrNull(record[graphType]);
+  };
+
+  const selectedGraph = graphTypes.find(
+    (graphType) => graphType.value === selectedGraphType
+  );
+  const validHistoryDates = historyRecords
+    .map((record) => getRecordDate(record.timestamp))
+    .filter(Boolean);
+  const latestHistoryDate =
+    validHistoryDates.length > 0
+      ? new Date(Math.max(...validHistoryDates.map((date) => date.getTime())))
+      : new Date();
+  const graphWeekStart = getWeekStart(latestHistoryDate);
+  const datedDayTabs = dayTabs.map((day) => {
+    const windowStart = addDays(graphWeekStart, day.offset);
+    const windowEnd = addDays(windowStart, 1);
+
+    return {
+      ...day,
+      dateLabel: formatShortDate(windowStart),
+      windowStart,
+      windowEnd,
+    };
+  });
+  const selectedHistoryDayTab =
+    datedDayTabs.find((day) => day.value === selectedHistoryDay) ||
+    datedDayTabs[0];
+  const selectedHistoryDayLabel = selectedHistoryDayTab?.label || "Monday";
+  const selectedHistoryWindowLabel = selectedHistoryDayTab
+    ? `${formatWindowDateTime(selectedHistoryDayTab.windowStart)} to ${formatWindowDateTime(
+        selectedHistoryDayTab.windowEnd
+      )}`
+    : "8:00 AM to next-day 8:00 AM";
+
+  const graphRecords = historyRecords
+    .map((record) => {
+      const date = getRecordDate(record.timestamp);
+
+      if (!date) {
+        return null;
+      }
+
+      return {
+        ...record,
+        date,
+        windowHour: getHistoryWindowHour(date),
+      };
+    })
+    .filter(
+      (record) =>
+        record &&
+        selectedHistoryDayTab &&
+        record.date >= selectedHistoryDayTab.windowStart &&
+        record.date < selectedHistoryDayTab.windowEnd &&
+        getGraphValue(record, selectedGraphType) !== null
+    )
+    .sort((a, b) => a.windowHour - b.windowHour);
+
+  const graphValues = graphRecords.map((record) =>
+    getGraphValue(record, selectedGraphType)
+  );
+  const graphAverage =
+    graphValues.length > 0
+      ? graphValues.reduce((total, value) => total + value, 0) / graphValues.length
+      : null;
+  const latestGraphRecord = graphRecords[graphRecords.length - 1] || null;
+  const latestGraphValue = latestGraphRecord
+    ? getGraphValue(latestGraphRecord, selectedGraphType)
+    : null;
+  const pumpOnCount = graphRecords.filter(
+    (record) => getRecordPumpValue(record) === 1
+  ).length;
+  const pumpModeCounts = graphRecords.reduce(
+    (counts, record) => {
+      const mode = String(getRecordMode(record) || "").toUpperCase();
+
+      if (mode === "AUTO") {
+        return { ...counts, auto: counts.auto + 1 };
+      }
+
+      if (mode === "MANUAL") {
+        return { ...counts, manual: counts.manual + 1 };
+      }
+
+      return counts;
+    },
+    { auto: 0, manual: 0 }
+  );
+
+  const graphUnit =
+    selectedGraphType === "soilMoisture"
+      ? "%"
+      : selectedGraphType === "leafTemp" || selectedGraphType === "deltaT"
+        ? "°C"
+        : "";
+
+  const formatGraphValue = (value) => {
+    if (value === null || value === undefined) {
+      return "--";
+    }
+
+    if (selectedGraphType === "pump") {
+      return value === 1 ? "ON" : "OFF";
+    }
+
+    return `${Number(value).toFixed(1)} ${graphUnit}`;
+  };
+
+  const getDeltaTStatus = (value) => {
+    if (value === null || value === undefined) {
+      return "--";
+    }
+
+    return value >= 3 ? "Stressed" : "Healthy";
+  };
+
+  const renderHistoryGraph = () => {
+    const width = 920;
+    const height = 320;
+    const padding = { top: 26, right: 28, bottom: 42, left: 54 };
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    const values = graphRecords.map((record) =>
+      getGraphValue(record, selectedGraphType)
+    );
+    const valueMin = selectedGraphType === "pump" ? 0 : Math.min(...values);
+    const valueMax = selectedGraphType === "pump" ? 1 : Math.max(...values);
+    const lowerBound =
+      selectedGraphType === "soilMoisture"
+        ? 0
+        : selectedGraphType === "pump"
+          ? 0
+          : Math.floor(valueMin - 1);
+    const upperBound =
+      selectedGraphType === "soilMoisture"
+        ? Math.max(100, valueMax)
+        : selectedGraphType === "pump"
+          ? 1
+          : Math.ceil(valueMax + 1);
+    const yRange = upperBound - lowerBound || 1;
+    const getX = (windowHour) => padding.left + (windowHour / 24) * plotWidth;
+    const getY = (value) =>
+      padding.top + ((upperBound - value) / yRange) * plotHeight;
+    const points = graphRecords.map((record) => {
+      const value = getGraphValue(record, selectedGraphType);
+
+      return {
+        x: getX(record.windowHour),
+        y: getY(value),
+        value,
+        record,
+      };
+    });
+    const linePoints = points.map((point) => `${point.x},${point.y}`).join(" ");
+    const yTicks =
+      selectedGraphType === "pump"
+        ? [0, 1]
+        : [lowerBound, lowerBound + yRange / 2, upperBound];
+    const deltaThresholdY =
+      selectedGraphType === "deltaT" && lowerBound <= 3 && upperBound >= 3
+        ? getY(3)
+        : null;
+
+    return (
+      <div className="chart-frame">
+        {points.length > 0 ? (
+          <svg
+            className="history-chart"
+            viewBox={`0 0 ${width} ${height}`}
+            role="img"
+            aria-label={`${selectedGraph?.label} graph for ${selectedHistoryDayLabel}`}
+          >
+            <line
+              className="chart-axis"
+              x1={padding.left}
+              x2={padding.left}
+              y1={padding.top}
+              y2={height - padding.bottom}
+            />
+            <line
+              className="chart-axis"
+              x1={padding.left}
+              x2={width - padding.right}
+              y1={height - padding.bottom}
+              y2={height - padding.bottom}
+            />
+
+            {[0, 6, 12, 18, 24].map((hour) => {
+              const x = getX(hour);
+              const labelHour = (8 + hour) % 24 || 24;
+
+              return (
+                <g key={hour}>
+                  <line
+                    className="chart-grid-line"
+                    x1={x}
+                    x2={x}
+                    y1={padding.top}
+                    y2={height - padding.bottom}
+                  />
+                  <text className="chart-label" x={x} y={height - 14}>
+                    {labelHour === 24 ? "12am" : `${labelHour}:00`}
+                  </text>
+                </g>
+              );
+            })}
+
+            {yTicks.map((tick) => {
+              const y = getY(tick);
+
+              return (
+                <g key={tick}>
+                  <line
+                    className="chart-grid-line"
+                    x1={padding.left}
+                    x2={width - padding.right}
+                    y1={y}
+                    y2={y}
+                  />
+                  <text className="chart-label chart-label-y" x={14} y={y + 4}>
+                    {selectedGraphType === "pump"
+                      ? tick
+                      : `${tick.toFixed(1)}${graphUnit}`}
+                  </text>
+                </g>
+              );
+            })}
+
+            {deltaThresholdY !== null ? (
+              <g>
+                <line
+                  className="chart-threshold-line"
+                  x1={padding.left}
+                  x2={width - padding.right}
+                  y1={deltaThresholdY}
+                  y2={deltaThresholdY}
+                />
+                <text
+                  className="chart-threshold-label"
+                  x={width - padding.right - 76}
+                  y={deltaThresholdY - 8}
+                >
+                  Stress line
+                </text>
+              </g>
+            ) : null}
+
+            <polyline className="chart-line" points={linePoints} />
+
+            {points.map((point) => (
+              <g key={point.record.id}>
+                <circle className="chart-point" cx={point.x} cy={point.y} r="5" />
+                <title>
+                  {`${formatTimestamp(point.record.timestamp)} - ${formatGraphValue(point.value)}`}
+                </title>
+              </g>
+            ))}
+          </svg>
+        ) : (
+          <div className="chart-empty">
+            <p className="panel-value">No graph data for this day yet.</p>
+            <p className="panel-subvalue">
+              Records need valid timestamps and values for the selected graph.
+            </p>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -331,31 +741,39 @@ function Dashboard({ user, onLocalDevLogout }) {
             <span className="status-pill">Live feed</span>
           </div>
 
-          {sensorData ? (
+          {displaySensorData ? (
             <div className="dashboard-grid">
               <div className="info-panel">
                 <p className="panel-label">Air Temperature</p>
-                <p className="panel-value">{sensorData.airTemp ?? "--"} °C</p>
+                <p className="panel-value">
+                  {displaySensorData.airTemp ?? "--"} °C
+                </p>
               </div>
 
               <div className="info-panel">
                 <p className="panel-label">Humidity</p>
-                <p className="panel-value">{sensorData.humidity ?? "--"} %</p>
+                <p className="panel-value">
+                  {displaySensorData.humidity ?? "--"} %
+                </p>
               </div>
 
               <div className="info-panel">
                 <p className="panel-label">Leaf Temperature</p>
-                <p className="panel-value">{sensorData.leafTemp ?? "--"} °C</p>
+                <p className="panel-value">
+                  {displaySensorData.leafTemp ?? "--"} °C
+                </p>
               </div>
 
               <div className="info-panel">
                 <p className="panel-label">Soil Moisture</p>
-                <p className="panel-value">{sensorData.soilMoisture ?? "--"} %</p>
+                <p className="panel-value">
+                  {displaySensorData.soilMoisture ?? "--"} %
+                </p>
               </div>
 
               <div className="info-panel">
                 <p className="panel-label">Light</p>
-                <p className="panel-value">{sensorData.light ?? "--"}</p>
+                <p className="panel-value">{displaySensorData.light ?? "--"}</p>
               </div>
             </div>
           ) : (
@@ -498,7 +916,7 @@ function Dashboard({ user, onLocalDevLogout }) {
             <div>
               <h2 className="section-title">History</h2>
               <p className="section-kicker">
-                All records from `device1/history`.
+                Records and daily graphs from `device1/history`.
               </p>
             </div>
             <span className="status-pill">
@@ -507,7 +925,29 @@ function Dashboard({ user, onLocalDevLogout }) {
             </span>
           </div>
 
-          {historyRecords.length > 0 ? (
+          <div className="tab-row" role="tablist" aria-label="History views">
+            <button
+              className={`tab-button ${activeHistoryTab === "records" ? "tab-button-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={activeHistoryTab === "records"}
+              onClick={() => setActiveHistoryTab("records")}
+            >
+              History Record
+            </button>
+            <button
+              className={`tab-button ${activeHistoryTab === "graphs" ? "tab-button-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={activeHistoryTab === "graphs"}
+              onClick={() => setActiveHistoryTab("graphs")}
+            >
+              Daily Graphs
+            </button>
+          </div>
+
+          {activeHistoryTab === "records" ? (
+            historyRecords.length > 0 ? (
             <div className="history-list">
               {historyRecords.map((record) => (
                 <div className="info-panel" key={record.id}>
@@ -559,9 +999,102 @@ function Dashboard({ user, onLocalDevLogout }) {
                 </div>
               ))}
             </div>
+            ) : (
+              <div className="info-panel">
+                <p className="panel-value">No history records available yet.</p>
+              </div>
+            )
           ) : (
-            <div className="info-panel">
-              <p className="panel-value">No history records available yet.</p>
+            <div className="history-graph-panel">
+              <div className="graph-control-group">
+                <p className="panel-label">Day</p>
+                <div className="tab-row tab-row-compact" role="tablist" aria-label="Graph days">
+                  {datedDayTabs.map((day) => (
+                    <button
+                      className={`tab-button ${selectedHistoryDay === day.value ? "tab-button-active" : ""}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={selectedHistoryDay === day.value}
+                      key={day.value}
+                      onClick={() => setSelectedHistoryDay(day.value)}
+                    >
+                      <span className="tab-button-main">{day.label}</span>
+                      <span className="tab-button-sub">{day.dateLabel}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="graph-control-group">
+                <label className="field-label" htmlFor="history-graph-type">
+                  Graph
+                </label>
+                <select
+                  className="field-input graph-select"
+                  id="history-graph-type"
+                  value={selectedGraphType}
+                  onChange={(event) => setSelectedGraphType(event.target.value)}
+                >
+                  {graphTypes.map((graphType) => (
+                    <option key={graphType.value} value={graphType.value}>
+                      {graphType.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="graph-summary-grid">
+                <div className="info-panel">
+                  <p className="panel-label">Window</p>
+                  <p className="panel-value">
+                    {selectedHistoryDayLabel} {selectedHistoryDayTab?.dateLabel}
+                  </p>
+                  <p className="panel-subvalue">{selectedHistoryWindowLabel}</p>
+                </div>
+
+                <div className="info-panel">
+                  <p className="panel-label">Selected Graph</p>
+                  <p className="panel-value">{selectedGraph?.label}</p>
+                  <p className="panel-subvalue">
+                    {graphRecords.length} plotted{" "}
+                    {graphRecords.length === 1 ? "record" : "records"}
+                  </p>
+                </div>
+
+                {selectedGraphType === "pump" ? (
+                  <div className="info-panel">
+                    <p className="panel-label">Pump On Frequency</p>
+                    <p className="panel-value">
+                      {pumpOnCount} / {graphRecords.length || 0}
+                    </p>
+                    <p className="panel-subvalue">
+                      AUTO {pumpModeCounts.auto} - MANUAL {pumpModeCounts.manual}
+                    </p>
+                  </div>
+                ) : selectedGraphType === "deltaT" ? (
+                  <div className="info-panel">
+                    <p className="panel-label">Latest Status</p>
+                    <p className="panel-value">
+                      {getDeltaTStatus(latestGraphValue)}
+                    </p>
+                    <p className="panel-subvalue">
+                      Latest Delta T: {formatGraphValue(latestGraphValue)}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="info-panel">
+                    <p className="panel-label">Average</p>
+                    <p className="panel-value">
+                      {formatGraphValue(graphAverage)}
+                    </p>
+                    <p className="panel-subvalue">
+                      Latest: {formatGraphValue(latestGraphValue)}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {renderHistoryGraph()}
             </div>
           )}
         </section>

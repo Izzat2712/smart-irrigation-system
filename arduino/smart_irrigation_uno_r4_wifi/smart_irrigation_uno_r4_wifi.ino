@@ -314,13 +314,6 @@ bool hasValidDecisionInputs() {
 
 
 
-void addServerTimestamp(JsonDocument& doc) {
-  JsonObject timestamp = doc.createNestedObject("timestamp");
-  timestamp[".sv"] = "timestamp";
-}
-
-
-
 
 void calculateDecision() {
   if (!hasValidDecisionInputs()) {
@@ -388,7 +381,7 @@ String sensorJson() {
   doc["soilRaw"] = soilRaw;
   doc["lux"] = isnan(lux) ? 0 : round(lux * 10) / 10.0;
   doc["light"] = lightState;
-  addServerTimestamp(doc);
+  doc["timestamp"][".sv"] = "timestamp";
 
 
 
@@ -428,7 +421,7 @@ void uploadDecisionData() {
   doc["deltaT"] = isnan(deltaT) ? 0 : round(deltaT * 10) / 10.0;
   doc["plantStatus"] = plantStatus;
   doc["recommendation"] = recommendation;
-  addServerTimestamp(doc);
+  doc["timestamp"][".sv"] = "timestamp";
 
 
 
@@ -534,7 +527,7 @@ void uploadHistoryRecord() {
   doc["deltaT"] = isnan(deltaT) ? 0 : round(deltaT * 10) / 10.0;
   doc["plantStatus"] = plantStatus;
   doc["recommendation"] = recommendation;
-  addServerTimestamp(doc);
+  doc["timestamp"][".sv"] = "timestamp";
 
 
 
