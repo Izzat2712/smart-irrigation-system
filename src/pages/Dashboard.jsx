@@ -4,6 +4,20 @@ import { signOut } from "firebase/auth";
 import { onValue, ref, set } from "firebase/database";
 import { auth, db } from "../firebase";
 
+const REAL_TIMESTAMP_MIN = 946684800000;
+
+const isLegacyUptimeTimestamp = (timestamp) =>
+  typeof timestamp === "number" && timestamp > 0 && timestamp < REAL_TIMESTAMP_MIN;
+
+const hasRealTimestamp = (timestamp) => {
+  if (typeof timestamp === "number") {
+    return timestamp >= REAL_TIMESTAMP_MIN;
+  }
+
+  const parsed = new Date(timestamp || 0).getTime();
+  return !Number.isNaN(parsed) && parsed >= REAL_TIMESTAMP_MIN;
+};
+
 function Dashboard({ user, onLocalDevLogout }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -43,6 +57,7 @@ function Dashboard({ user, onLocalDevLogout }) {
           id,
           ...value,
         }))
+        .filter((record) => hasRealTimestamp(record.timestamp))
         .sort((a, b) => {
           const firstTime = getSortableTimestamp(b.timestamp);
           const secondTime = getSortableTimestamp(a.timestamp);
@@ -238,9 +253,6 @@ function Dashboard({ user, onLocalDevLogout }) {
     hasDecisionInputs,
     pumpStatus,
   ]);
-
-  const isLegacyUptimeTimestamp = (timestamp) =>
-    typeof timestamp === "number" && timestamp > 0 && timestamp < 946684800000;
 
   const formatDateTime = (date) =>
     date.toLocaleString("en-GB", {
