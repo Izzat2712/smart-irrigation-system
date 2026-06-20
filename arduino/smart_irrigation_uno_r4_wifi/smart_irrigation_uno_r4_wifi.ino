@@ -14,9 +14,22 @@
 
 
 
+
+
+
+
+
+
+
+
+
 // -------------------- WiFi --------------------
 const char WIFI_SSID[] = SECRET_WIFI_SSID;
 const char WIFI_PASS[] = SECRET_WIFI_PASS;
+
+
+
+
 
 
 
@@ -32,10 +45,18 @@ const char FIREBASE_HOST[] = "smart-irrigation-system-4b76d-default-rtdb.asia-so
 
 
 
+
+
+
+
 // Leave empty if your test Realtime Database rules allow public read/write.
 // For secured rules, use a valid Firebase auth token or database secret:
 // const char FIREBASE_AUTH[] = "YOUR_TOKEN";
 const char FIREBASE_AUTH[] = SECRET_FIREBASE_AUTH;
+
+
+
+
 
 
 
@@ -45,9 +66,17 @@ const char DEVICE_ID[] = "device1";
 
 
 
+
+
+
+
 // -------------------- Pins --------------------
 const int SOIL_PIN = A0;
 const int PUMP_PIN = 7;
+
+
+
+
 
 
 
@@ -61,6 +90,10 @@ const int SOIL_WET_RAW = 160;
 
 
 
+
+
+
+
 // BH1750 lux threshold. Tune for your actual plant area.
 const float NIGHT_LUX_MAX = 50.0;
 const float LOW_LIGHT_LUX_MAX = 500.0;
@@ -69,9 +102,17 @@ const float BRIGHT_LUX_MAX = 10000.0;
 
 
 
+
+
+
+
 // Automation thresholds. These match the dashboard logic.
 const float HIGH_DELTA_T_THRESHOLD = 3.0;
-const int LOW_SOIL_MOISTURE_THRESHOLD = 40;
+const int LOW_SOIL_MOISTURE_THRESHOLD = 60;
+
+
+
+
 
 
 
@@ -84,8 +125,16 @@ const unsigned long HISTORY_UPLOAD_INTERVAL_MS = 60000;
 
 
 
+
+
+
+
 WiFiSSLClient wifiClient;
 HttpClient http(wifiClient, FIREBASE_HOST, 443);
+
+
+
+
 
 
 
@@ -97,9 +146,17 @@ BH1750 lightMeter;
 
 
 
+
+
+
+
 unsigned long lastSensorUpload = 0;
 unsigned long lastControlPoll = 0;
 unsigned long lastHistoryUpload = 0;
+
+
+
+
 
 
 
@@ -122,8 +179,16 @@ String recommendation = "WAITING_FOR_SENSOR_DATA";
 
 
 
+
+
+
+
 String firebasePath(const String& path) {
   String fullPath = "/" + path + ".json";
+
+
+
+
 
 
 
@@ -136,8 +201,16 @@ String firebasePath(const String& path) {
 
 
 
+
+
+
+
   return fullPath;
 }
+
+
+
+
 
 
 
@@ -150,7 +223,15 @@ void connectWiFi() {
 
 
 
+
+
+
+
   Serial.print("Connecting to WiFi");
+
+
+
+
 
 
 
@@ -163,10 +244,18 @@ void connectWiFi() {
 
 
 
+
+
+
+
   Serial.println();
   Serial.print("Connected. IP: ");
   Serial.println(WiFi.localIP());
 }
+
+
+
+
 
 
 
@@ -177,12 +266,24 @@ bool requestFirebase(const char* method, const String& path, const String& body,
 
 
 
+
+
+
+
   String url = firebasePath(path);
 
 
 
 
+
+
+
+
   http.beginRequest();
+
+
+
+
 
 
 
@@ -202,8 +303,16 @@ bool requestFirebase(const char* method, const String& path, const String& body,
 
 
 
+
+
+
+
   http.sendHeader("Content-Type", "application/json");
   http.sendHeader("Connection", "close");
+
+
+
+
 
 
 
@@ -217,7 +326,15 @@ bool requestFirebase(const char* method, const String& path, const String& body,
 
 
 
+
+
+
+
   http.endRequest();
+
+
+
+
 
 
 
@@ -225,6 +342,10 @@ bool requestFirebase(const char* method, const String& path, const String& body,
   int statusCode = http.responseStatusCode();
   response = http.responseBody();
   http.stop();
+
+
+
+
 
 
 
@@ -242,8 +363,16 @@ bool requestFirebase(const char* method, const String& path, const String& body,
 
 
 
+
+
+
+
   return true;
 }
+
+
+
+
 
 
 
@@ -254,15 +383,23 @@ int readSoilMoisturePercent() {
 
 
 
+
+
+
+
   int percent = map(soilRaw, SOIL_DRY_RAW, SOIL_WET_RAW, 0, 100);
   return constrain(percent, 0, 100);
 }
+
+
 
 
 String getLightState(float luxValue) {
   if (isnan(luxValue)) {
     return "UNKNOWN";
   }
+
+
 
 
   if (luxValue < NIGHT_LUX_MAX) {
@@ -277,16 +414,43 @@ String getLightState(float luxValue) {
 }
 
 
+
+
+float readHumidityRetry() {
+  for (int i = 0; i < 3; i++) {
+    float h = sht31.readHumidity();
+    if (!isnan(h)) return h;
+    delay(50);
+  }
+  return NAN;
+}
+
+float readLeafTempRetry() {
+  for (int i = 0; i < 3; i++) {
+    float t = mlx.readObjectTempC();
+    if (!isnan(t)) return t;
+    delay(50);
+  }
+  return NAN;
+}
+
+float readLuxRetry() {
+  for (int i = 0; i < 3; i++) {
+    float l = lightMeter.readLightLevel();
+    if (!isnan(l) && l >= 0) return l;
+    delay(100);
+  }
+  return -1;
+}
+
 void readSensors() {
   airTemp = sht31.readTemperature();
-  humidity = sht31.readHumidity();
-  leafTemp = mlx.readObjectTempC();
-  lux = lightMeter.readLightLevel();
+  humidity = readHumidityRetry();
+  leafTemp = readLeafTempRetry();
+  lux = readLuxRetry();
+
   soilMoisture = readSoilMoisturePercent();
- lightState = getLightState(lux);
-
-
-
+  lightState = getLightState(lux);
 
   Serial.println("---- Sensor Readings ----");
   Serial.print("Air temp: ");
@@ -303,14 +467,26 @@ void readSensors() {
   Serial.println(lux);
   Serial.print("Light: ");
   Serial.println(lightState);
+
+  if (isnan(humidity) || isnan(leafTemp) || lux < 0) {
+    Serial.println("Warning: I2C sensor read failed. Check SDA/SCL/power.");
+  }
 }
+
+
+
+
 
 
 
 
 bool hasValidDecisionInputs() {
-  return !isnan(airTemp) && !isnan(leafTemp) && lightState != "UNKNOWN";
+  return soilMoisture >= 0 && soilMoisture <= 100 && lightState != "UNKNOWN";
 }
+
+
+
+
 
 
 
@@ -326,33 +502,49 @@ void calculateDecision() {
 
 
 
+
+
+
+
   deltaT = leafTemp - airTemp;
 
 
 
 
-  bool isHighDeltaT = deltaT >= HIGH_DELTA_T_THRESHOLD;
+
+
+
+
   bool isLowSoilMoisture = soilMoisture < LOW_SOIL_MOISTURE_THRESHOLD;
+  bool isNightLight = lightState == "NIGHT";
 
 
 
 
-  plantStatus = isHighDeltaT ? "Stressed" : "Healthy";
 
 
 
 
-  if (isHighDeltaT && isLowSoilMoisture && lightState == "NIGHT") {
+  plantStatus = isLowSoilMoisture ? "Needs Water" : "Moisture OK";
+
+
+
+
+
+
+
+
+  if (isLowSoilMoisture && isNightLight) {
     recommendation = "WATER_NOW";
-  } else if (isHighDeltaT && isLowSoilMoisture && lightState == "DAY") {
+  } else if (isLowSoilMoisture && !isNightLight) {
     recommendation = "WAIT_UNTIL_NIGHT";
-  } else if (isHighDeltaT && !isLowSoilMoisture) {
-    recommendation = "DO_NOT_IRRIGATE";
-  } else if (!isHighDeltaT && isLowSoilMoisture) {
-    recommendation = "MONITOR_DELAY_IRRIGATION";
   } else {
     recommendation = "NO_IRRIGATION_NEEDED";
   }
+
+
+
+
 
 
 
@@ -368,8 +560,16 @@ void calculateDecision() {
 
 
 
+
+
+
+
 String sensorJson() {
   StaticJsonDocument<512> doc;
+
+
+
+
 
 
 
@@ -386,10 +586,18 @@ String sensorJson() {
 
 
 
+
+
+
+
   String json;
   serializeJson(doc, json);
   return json;
 }
+
+
+
+
 
 
 
@@ -402,6 +610,10 @@ void uploadSensorData() {
 
 
 
+
+
+
+
   if (requestFirebase("PUT", path, body, response)) {
     Serial.println("Uploaded sensorData.");
   }
@@ -410,9 +622,17 @@ void uploadSensorData() {
 
 
 
+
+
+
+
 void uploadDecisionData() {
   String response;
   String path = String(DEVICE_ID) + "/decision";
+
+
+
+
 
 
 
@@ -426,8 +646,16 @@ void uploadDecisionData() {
 
 
 
+
+
+
+
   String body;
   serializeJson(doc, body);
+
+
+
+
 
 
 
@@ -440,10 +668,18 @@ void uploadDecisionData() {
 
 
 
+
+
+
+
 void uploadPumpCommand() {
   String response;
   String path = String(DEVICE_ID) + "/control/pump";
   String body = String("\"") + actualPumpStatus + "\"";
+
+
+
+
 
 
 
@@ -458,6 +694,10 @@ void uploadPumpCommand() {
 
 
 
+
+
+
+
 void syncPumpStatus() {
   if (actualPumpStatus == lastSyncedPumpStatus) {
     return;
@@ -466,8 +706,16 @@ void syncPumpStatus() {
 
 
 
+
+
+
+
   uploadPumpCommand();
 }
+
+
+
+
 
 
 
@@ -480,6 +728,10 @@ void runManualControl() {
 
 
 
+
+
+
+
   if (pumpCommand != "ON" && pumpCommand != "OFF") {
     pumpCommand = "OFF";
   }
@@ -487,9 +739,17 @@ void runManualControl() {
 
 
 
+
+
+
+
   applyPumpCommand();
   syncPumpStatus();
 }
+
+
+
+
 
 
 
@@ -502,6 +762,10 @@ void runAutomation() {
 
 
 
+
+
+
+
   pumpCommand = recommendation == "WATER_NOW" ? "ON" : "OFF";
   applyPumpCommand();
   syncPumpStatus();
@@ -510,9 +774,17 @@ void runAutomation() {
 
 
 
+
+
+
+
 void uploadHistoryRecord() {
   String response;
   String path = String(DEVICE_ID) + "/history";
+
+
+
+
 
 
 
@@ -532,8 +804,16 @@ void uploadHistoryRecord() {
 
 
 
+
+
+
+
   String body;
   serializeJson(doc, body);
+
+
+
+
 
 
 
@@ -546,9 +826,17 @@ void uploadHistoryRecord() {
 
 
 
+
+
+
+
 void pollControl() {
   String response;
   String path = String(DEVICE_ID) + "/control";
+
+
+
+
 
 
 
@@ -560,8 +848,16 @@ void pollControl() {
 
 
 
+
+
+
+
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, response);
+
+
+
+
 
 
 
@@ -575,8 +871,16 @@ void pollControl() {
 
 
 
+
+
+
+
   mode = doc["mode"] | "MANUAL";
   pumpCommand = doc["pump"] | "OFF";
+
+
+
+
 
 
 
@@ -589,12 +893,20 @@ void pollControl() {
 
 
 
+
+
+
+
   if (mode == "AUTO") {
     runAutomation();
   } else {
     runManualControl();
   }
 }
+
+
+
+
 
 
 
@@ -612,30 +924,37 @@ void applyPumpCommand() {
 
 
 
+
+
+
+
 void setupSensors() {
   Wire.begin();
-
-
-
+  Wire.setClock(100000);   // slower I2C = more stable
+  delay(100);
 
   if (!mlx.begin()) {
     Serial.println("MLX90614 not found. Check wiring.");
+  } else {
+    Serial.println("MLX90614 OK.");
   }
-
-
-
 
   if (!sht31.begin(0x44)) {
-    Serial.println("SHT31 not found at 0x44. Try 0x45 if your module uses that address.");
+    Serial.println("SHT31 not found at 0x44. Try 0x45.");
+  } else {
+    Serial.println("SHT31 OK.");
   }
-
-
-
 
   if (!lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
     Serial.println("BH1750 not found. Check wiring.");
+  } else {
+    Serial.println("BH1750 OK.");
   }
 }
+
+
+
+
 
 
 
@@ -647,9 +966,17 @@ void ensureDefaultControlExists() {
 
 
 
+
+
+
+
   if (requestFirebase("GET", path, "", response) && response != "null") {
     return;
   }
+
+
+
+
 
 
 
@@ -661,9 +988,17 @@ void ensureDefaultControlExists() {
 
 
 
+
+
+
+
 void setup() {
   Serial.begin(115200);
   delay(1500);
+
+
+
+
 
 
 
@@ -674,7 +1009,15 @@ void setup() {
 
 
 
+
+
+
+
   analogReadResolution(12);
+
+
+
+
 
 
 
@@ -687,14 +1030,26 @@ void setup() {
 
 
 
+
+
+
+
   Serial.println("Smart irrigation controller started.");
 }
 
 
 
 
+
+
+
+
 void loop() {
   unsigned long now = millis();
+
+
+
+
 
 
 
@@ -711,10 +1066,18 @@ void loop() {
 
 
 
+
+
+
+
   if (now - lastControlPoll >= CONTROL_POLL_INTERVAL_MS) {
     lastControlPoll = now;
     pollControl();
   }
+
+
+
+
 
 
 

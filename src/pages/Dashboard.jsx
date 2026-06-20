@@ -5,6 +5,7 @@ import { onValue, ref, set } from "firebase/database";
 import { auth, db } from "../firebase";
 
 const REAL_TIMESTAMP_MIN = 946684800000;
+const LOW_SOIL_MOISTURE_THRESHOLD = 60;
 
 const isLegacyUptimeTimestamp = (timestamp) =>
   typeof timestamp === "number" && timestamp > 0 && timestamp < REAL_TIMESTAMP_MIN;
@@ -156,36 +157,26 @@ function Dashboard({ user, onLocalDevLogout }) {
   const soilMoisture = toNumberOrNull(displaySensorData?.soilMoisture);
   const light =
     typeof displaySensorData?.light === "string" ? displaySensorData.light : null;
-
-  const hasDecisionInputs =
-    airTemp !== null &&
-    leafTemp !== null &&
-    soilMoisture !== null &&
-    Boolean(light);
-
-  const calculatedDeltaT = hasDecisionInputs ? leafTemp - airTemp : null;
-  const isHighDeltaT = calculatedDeltaT !== null ? calculatedDeltaT >= 3 : false;
-  const isLowSoilMoisture = soilMoisture !== null ? soilMoisture < 40 : false;
   const normalizedLight = light?.toUpperCase();
+
+  const hasDecisionInputs = soilMoisture !== null && Boolean(normalizedLight);
+
+  const calculatedDeltaT =
+    airTemp !== null && leafTemp !== null ? leafTemp - airTemp : null;
+  const isLowSoilMoisture =
+    soilMoisture !== null ? soilMoisture < LOW_SOIL_MOISTURE_THRESHOLD : false;
   const isNightLight = normalizedLight === "NIGHT";
-  const isDayLight = ["DAY", "LOW_LIGHT", "BRIGHT", "STRONG_DAYLIGHT"].includes(
-    normalizedLight
-  );
 
   let calculatedPlantStatus = "--";
   let calculatedRecommendation = "WAITING_FOR_SENSOR_DATA";
 
   if (hasDecisionInputs) {
-    calculatedPlantStatus = isHighDeltaT ? "Stressed" : "Healthy";
+    calculatedPlantStatus = isLowSoilMoisture ? "Needs Water" : "Moisture OK";
 
-    if (isHighDeltaT && isLowSoilMoisture && isNightLight) {
+    if (isLowSoilMoisture && isNightLight) {
       calculatedRecommendation = "WATER_NOW";
-    } else if (isHighDeltaT && isLowSoilMoisture && isDayLight) {
+    } else if (isLowSoilMoisture && !isNightLight) {
       calculatedRecommendation = "WAIT_UNTIL_NIGHT";
-    } else if (isHighDeltaT && !isLowSoilMoisture) {
-      calculatedRecommendation = "DO_NOT_IRRIGATE";
-    } else if (!isHighDeltaT && isLowSoilMoisture) {
-      calculatedRecommendation = "MONITOR_DELAY_IRRIGATION";
     } else {
       calculatedRecommendation = "NO_IRRIGATION_NEEDED";
     }
@@ -204,13 +195,14 @@ function Dashboard({ user, onLocalDevLogout }) {
 
   useEffect(() => {
     const syncDecisionAndAutoPump = async () => {
-      if (!hasDecisionInputs || calculatedDeltaT === null) {
+      if (!hasDecisionInputs) {
         return;
       }
 
       try {
         await set(ref(db, "device1/decision"), {
-          deltaT: Number(calculatedDeltaT.toFixed(1)),
+          deltaT:
+            calculatedDeltaT !== null ? Number(calculatedDeltaT.toFixed(1)) : null,
           plantStatus: calculatedPlantStatus,
           recommendation: calculatedRecommendation,
           timestamp: new Date().toISOString(),
@@ -849,8 +841,7 @@ function Dashboard({ user, onLocalDevLogout }) {
             <div>
               <h2 className="section-title">Smart Decision</h2>
               <p className="section-kicker">
-                A simple stress model based on Delta T, soil moisture, and
-                light.
+                Current recommendation is based on soil moisture and night time.
               </p>
             </div>
             <span className="status-pill">{activePlantStatus}</span>
@@ -869,10 +860,12 @@ function Dashboard({ user, onLocalDevLogout }) {
               <p className="panel-label">Plant Status</p>
               <p className="panel-value">{activePlantStatus}</p>
               <p className="panel-subvalue">
-                {calculatedDeltaT !== null
-                  ? isHighDeltaT
-                    ? "Leaf temperature is elevated."
-                    : "Stress level is currently low."
+                {hasDecisionInputs
+                  ? isLowSoilMoisture
+                    ? isNightLight
+                      ? `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}% and it is night.`
+                      : `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}%, waiting for night.`
+                    : `Soil moisture is at least ${LOW_SOIL_MOISTURE_THRESHOLD}%.`
                   : "Using the latest saved decision from Firebase."}
               </p>
             </div>
