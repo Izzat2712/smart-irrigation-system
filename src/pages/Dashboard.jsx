@@ -149,22 +149,7 @@ function Dashboard({ user, onLocalDevLogout }) {
     return Number.isNaN(parsed) ? null : parsed;
   };
 
-  const getComparableTimestamp = (timestamp) => {
-    if (typeof timestamp === "number") {
-      return timestamp > 0 ? timestamp : 0;
-    }
-
-    const parsed = new Date(timestamp || 0).getTime();
-    return Number.isNaN(parsed) ? 0 : parsed;
-  };
-
-  const latestHistoryRecord = historyRecords[0] || null;
-  const displaySensorData =
-    latestHistoryRecord &&
-    getComparableTimestamp(latestHistoryRecord.timestamp) >
-      getComparableTimestamp(sensorData?.timestamp)
-      ? latestHistoryRecord
-      : sensorData;
+  const displaySensorData = sensorData;
 
   const airTemp = toNumberOrNull(displaySensorData?.airTemp);
   const leafTemp = toNumberOrNull(displaySensorData?.leafTemp);
