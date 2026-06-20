@@ -378,9 +378,6 @@ function Dashboard({ user, onLocalDevLogout }) {
     return null;
   };
 
-  const getRecordMode = (record) =>
-    record.mode ?? record.controlMode ?? record.pumpMode ?? record.irrigationMode ?? null;
-
   const getRecordDeltaT = (record) => {
     const savedDeltaT = toNumberOrNull(record.deltaT);
 
@@ -480,22 +477,6 @@ function Dashboard({ user, onLocalDevLogout }) {
   const pumpOnCount = graphRecords.filter(
     (record) => getRecordPumpValue(record) === 1
   ).length;
-  const pumpModeCounts = graphRecords.reduce(
-    (counts, record) => {
-      const mode = String(getRecordMode(record) || "").toUpperCase();
-
-      if (mode === "AUTO") {
-        return { ...counts, auto: counts.auto + 1 };
-      }
-
-      if (mode === "MANUAL") {
-        return { ...counts, manual: counts.manual + 1 };
-      }
-
-      return counts;
-    },
-    { auto: 0, manual: 0 }
-  );
 
   const graphUnit =
     selectedGraphType === "soilMoisture"
@@ -1063,9 +1044,6 @@ function Dashboard({ user, onLocalDevLogout }) {
                     <p className="panel-label">Pump On Frequency</p>
                     <p className="panel-value">
                       {pumpOnCount} / {graphRecords.length || 0}
-                    </p>
-                    <p className="panel-subvalue">
-                      AUTO {pumpModeCounts.auto} - MANUAL {pumpModeCounts.manual}
                     </p>
                   </div>
                 ) : selectedGraphType === "deltaT" ? (
