@@ -543,6 +543,12 @@ function Dashboard({ user, onLocalDevLogout }) {
       selectedGraphType === "deltaT" && lowerBound <= 3 && upperBound >= 3
         ? getY(3)
         : null;
+    const soilThresholdY =
+      selectedGraphType === "soilMoisture" &&
+      lowerBound <= LOW_SOIL_MOISTURE_THRESHOLD &&
+      upperBound >= LOW_SOIL_MOISTURE_THRESHOLD
+        ? getY(LOW_SOIL_MOISTURE_THRESHOLD)
+        : null;
 
     return (
       <div className="chart-frame">
@@ -620,10 +626,29 @@ function Dashboard({ user, onLocalDevLogout }) {
                 />
                 <text
                   className="chart-threshold-label"
-                  x={width - padding.right - 76}
+                  x={padding.left + 12}
                   y={deltaThresholdY - 8}
                 >
                   Stress line
+                </text>
+              </g>
+            ) : null}
+
+            {soilThresholdY !== null ? (
+              <g>
+                <line
+                  className="chart-threshold-line"
+                  x1={padding.left}
+                  x2={width - padding.right}
+                  y1={soilThresholdY}
+                  y2={soilThresholdY}
+                />
+                <text
+                  className="chart-threshold-label"
+                  x={padding.left + 12}
+                  y={soilThresholdY - 8}
+                >
+                  Moisture line
                 </text>
               </g>
             ) : null}
