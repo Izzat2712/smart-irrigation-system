@@ -24,8 +24,9 @@
 
 
 // -------------------- WiFi --------------------
-const char WIFI_SSID[] = SECRET_WIFI_SSID;
-const char WIFI_PASS[] = SECRET_WIFI_PASS;
+// -------------------- WiFi --------------------
+const char WIFI_SSID[] = "Hotspot@PUTRA-2.4G";
+
 
 
 
@@ -153,6 +154,7 @@ BH1750 lightMeter;
 unsigned long lastSensorUpload = 0;
 unsigned long lastControlPoll = 0;
 unsigned long lastHistoryUpload = 0;
+int consecutiveI2CReadFailures = 0;
 
 
 
@@ -175,6 +177,35 @@ String lastSyncedPumpStatus = "";
 float deltaT = NAN;
 String plantStatus = "--";
 String recommendation = "WAITING_FOR_SENSOR_DATA";
+
+
+void setupSensors();
+
+
+
+
+
+
+
+float roundOneDecimal(float value) {
+  return round(value * 10) / 10.0;
+}
+
+
+
+
+
+
+
+template <typename TDocument>
+void setRoundedOrNull(TDocument& doc, const char* key, float value) {
+  if (isnan(value)) {
+    doc[key] = nullptr;
+    return;
+  }
+
+  doc[key] = roundOneDecimal(value);
+}
 
 
 
@@ -220,33 +251,13 @@ void connectWiFi() {
     return;
   }
 
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
 
-
-
-
-
-
-
-  Serial.print("Connecting to WiFi");
-
-
-
-
-
-
-
-
-  while (WiFi.begin(WIFI_SSID, WIFI_PASS) != WL_CONNECTED) {
+  while (WiFi.begin(WIFI_SSID) != WL_CONNECTED) {
     Serial.print(".");
     delay(3000);
   }
-
-
-
-
-
-
-
 
   Serial.println();
   Serial.print("Connected. IP: ");
@@ -425,6 +436,15 @@ float readHumidityRetry() {
   return NAN;
 }
 
+float readAirTempRetry() {
+  for (int i = 0; i < 3; i++) {
+    float t = sht31.readTemperature();
+    if (!isnan(t)) return t;
+    delay(50);
+  }
+  return NAN;
+}
+
 float readLeafTempRetry() {
   for (int i = 0; i < 3; i++) {
     float t = mlx.readObjectTempC();
@@ -443,11 +463,28 @@ float readLuxRetry() {
   return -1;
 }
 
+void recoverI2CSensors() {
+  Serial.println("Attempting I2C sensor recovery.");
+  Wire.end();
+  delay(100);
+  setupSensors();
+}
+
 void readSensors() {
-  airTemp = sht31.readTemperature();
-  humidity = readHumidityRetry();
-  leafTemp = readLeafTempRetry();
-  lux = readLuxRetry();
+  float newAirTemp = readAirTempRetry();
+  float newHumidity = readHumidityRetry();
+  float newLeafTemp = readLeafTempRetry();
+  float newLux = readLuxRetry();
+
+  bool airTempOk = !isnan(newAirTemp);
+  bool humidityOk = !isnan(newHumidity);
+  bool leafTempOk = !isnan(newLeafTemp);
+  bool luxOk = newLux >= 0;
+
+  if (airTempOk) airTemp = newAirTemp;
+  if (humidityOk) humidity = newHumidity;
+  if (leafTempOk) leafTemp = newLeafTemp;
+  if (luxOk) lux = newLux;
 
   soilMoisture = readSoilMoisturePercent();
   lightState = getLightState(lux);
@@ -468,8 +505,16 @@ void readSensors() {
   Serial.print("Light: ");
   Serial.println(lightState);
 
-  if (isnan(humidity) || isnan(leafTemp) || lux < 0) {
+  if (!airTempOk || !humidityOk || !leafTempOk || !luxOk) {
     Serial.println("Warning: I2C sensor read failed. Check SDA/SCL/power.");
+    consecutiveI2CReadFailures++;
+
+    if (consecutiveI2CReadFailures >= 2) {
+      recoverI2CSensors();
+      consecutiveI2CReadFailures = 0;
+    }
+  } else {
+    consecutiveI2CReadFailures = 0;
   }
 }
 
@@ -481,7 +526,11 @@ void readSensors() {
 
 
 bool hasValidDecisionInputs() {
-  return soilMoisture >= 0 && soilMoisture <= 100 && lightState != "UNKNOWN";
+  return soilMoisture >= 0 &&
+         soilMoisture <= 100 &&
+         lightState != "UNKNOWN" &&
+         !isnan(airTemp) &&
+         !isnan(leafTemp);
 }
 
 
@@ -574,12 +623,12 @@ String sensorJson() {
 
 
 
-  doc["airTemp"] = isnan(airTemp) ? 0 : round(airTemp * 10) / 10.0;
-  doc["humidity"] = isnan(humidity) ? 0 : round(humidity * 10) / 10.0;
-  doc["leafTemp"] = isnan(leafTemp) ? 0 : round(leafTemp * 10) / 10.0;
+  setRoundedOrNull(doc, "airTemp", airTemp);
+  setRoundedOrNull(doc, "humidity", humidity);
+  setRoundedOrNull(doc, "leafTemp", leafTemp);
   doc["soilMoisture"] = soilMoisture;
   doc["soilRaw"] = soilRaw;
-  doc["lux"] = isnan(lux) ? 0 : round(lux * 10) / 10.0;
+  setRoundedOrNull(doc, "lux", lux);
   doc["light"] = lightState;
   doc["timestamp"][".sv"] = "timestamp";
 
@@ -638,7 +687,7 @@ void uploadDecisionData() {
 
 
   StaticJsonDocument<384> doc;
-  doc["deltaT"] = isnan(deltaT) ? 0 : round(deltaT * 10) / 10.0;
+  setRoundedOrNull(doc, "deltaT", deltaT);
   doc["plantStatus"] = plantStatus;
   doc["recommendation"] = recommendation;
   doc["timestamp"][".sv"] = "timestamp";
@@ -790,13 +839,13 @@ void uploadHistoryRecord() {
 
 
   StaticJsonDocument<512> doc;
-  doc["airTemp"] = isnan(airTemp) ? 0 : round(airTemp * 10) / 10.0;
-  doc["humidity"] = isnan(humidity) ? 0 : round(humidity * 10) / 10.0;
-  doc["leafTemp"] = isnan(leafTemp) ? 0 : round(leafTemp * 10) / 10.0;
+  setRoundedOrNull(doc, "airTemp", airTemp);
+  setRoundedOrNull(doc, "humidity", humidity);
+  setRoundedOrNull(doc, "leafTemp", leafTemp);
   doc["soilMoisture"] = soilMoisture;
   doc["light"] = lightState;
   doc["pump"] = actualPumpStatus;
-  doc["deltaT"] = isnan(deltaT) ? 0 : round(deltaT * 10) / 10.0;
+  setRoundedOrNull(doc, "deltaT", deltaT);
   doc["plantStatus"] = plantStatus;
   doc["recommendation"] = recommendation;
   doc["timestamp"][".sv"] = "timestamp";
@@ -1087,4 +1136,3 @@ void loop() {
     uploadHistoryRecord();
   }
 }
-
