@@ -317,18 +317,23 @@ function Dashboard({ user, onLocalDevLogout }) {
     return Number.isNaN(date.getTime()) ? null : date;
   };
 
-  const getDateFilterBoundary = (dateValue, isEndOfDay = false) => {
-    if (!dateValue) {
+  const getDateFilterBoundary = (dateTimeValue, isEndBoundary = false) => {
+    if (!dateTimeValue) {
       return null;
     }
 
-    const date = new Date(`${dateValue}T00:00:00`);
+    const hasTimeValue = dateTimeValue.includes("T");
+    const date = new Date(
+      hasTimeValue ? dateTimeValue : `${dateTimeValue}T00:00:00`,
+    );
 
     if (Number.isNaN(date.getTime())) {
       return null;
     }
 
-    if (isEndOfDay) {
+    if (isEndBoundary && hasTimeValue) {
+      date.setSeconds(59, 999);
+    } else if (isEndBoundary) {
       date.setHours(23, 59, 59, 999);
     }
 
@@ -994,12 +999,12 @@ function Dashboard({ user, onLocalDevLogout }) {
                 <div className="history-filter-grid">
                   <div className="field-group">
                     <label className="field-label" htmlFor="history-filter-start">
-                      From date
+                      From date and time
                     </label>
                     <input
                       className="field-input"
                       id="history-filter-start"
-                      type="date"
+                      type="datetime-local"
                       value={historyFilterStartDate}
                       onChange={(event) =>
                         setHistoryFilterStartDate(event.target.value)
@@ -1009,12 +1014,12 @@ function Dashboard({ user, onLocalDevLogout }) {
 
                   <div className="field-group">
                     <label className="field-label" htmlFor="history-filter-end">
-                      To date
+                      To date and time
                     </label>
                     <input
                       className="field-input"
                       id="history-filter-end"
-                      type="date"
+                      type="datetime-local"
                       value={historyFilterEndDate}
                       onChange={(event) =>
                         setHistoryFilterEndDate(event.target.value)
@@ -1095,7 +1100,7 @@ function Dashboard({ user, onLocalDevLogout }) {
                 ) : (
                   <div className="info-panel">
                     <p className="panel-value">
-                      No history records match the selected date filter.
+                      No history records match the selected date and time filter.
                     </p>
                   </div>
                 )
