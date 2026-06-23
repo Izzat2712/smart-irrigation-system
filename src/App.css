@@ -739,10 +739,21 @@
   gap: 18px;
 }
 
+.graph-control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, max-content));
+  gap: 16px;
+  align-items: end;
+}
+
 .graph-control-group {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.graph-control-days {
+  grid-column: 1 / -1;
 }
 
 .graph-select {
@@ -870,6 +881,10 @@
   .graph-select,
   .history-edit-button {
     width: 100%;
+  }
+
+  .graph-control-grid {
+    grid-template-columns: 1fr;
   }
 
   .history-record-heading {
