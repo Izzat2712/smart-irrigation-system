@@ -1,11 +1,24 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { onValue, ref, set } from "firebase/database";
+import { onValue, push, ref, set, update } from "firebase/database";
 import { auth, db } from "../firebase";
 
 const REAL_TIMESTAMP_MIN = 946684800000;
 const LOW_SOIL_MOISTURE_THRESHOLD = 60;
+const DEFAULT_LIGHT_OPTIONS = ["NIGHT", "LOW_LIGHT", "BRIGHT", "STRONG_DAYLIGHT"];
+
+const getDateTimeInputValue = (timestamp = Date.now()) => {
+  const date = new Date(timestamp);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const pad = (value) => String(value).padStart(2, "0");
+
+  return `${safeDate.getFullYear()}-${pad(safeDate.getMonth() + 1)}-${pad(
+    safeDate.getDate(),
+  )}T${pad(safeDate.getHours())}:${pad(safeDate.getMinutes())}`;
+};
+
+const roundToOneDecimal = (value) => Number(value.toFixed(1));
 
 const isLegacyUptimeTimestamp = (timestamp) =>
   typeof timestamp === "number" && timestamp > 0 && timestamp < REAL_TIMESTAMP_MIN;
@@ -31,6 +44,22 @@ function Dashboard({ user, onLocalDevLogout }) {
   const [activeHistoryTab, setActiveHistoryTab] = useState("records");
   const [selectedHistoryDay, setSelectedHistoryDay] = useState(1);
   const [selectedGraphType, setSelectedGraphType] = useState("pump");
+  const [showHistoryManagementFeatures, setShowHistoryManagementFeatures] =
+    useState(true);
+  const [newHistoryForm, setNewHistoryForm] = useState({
+    timestamp: getDateTimeInputValue(),
+    soilMoisture: "",
+    light: "BRIGHT",
+    pump: "OFF",
+  });
+  const [editingRecordId, setEditingRecordId] = useState(null);
+  const [editHistoryForm, setEditHistoryForm] = useState(null);
+  const [historySaveLoading, setHistorySaveLoading] = useState(false);
+  const [historyDeleteLoading, setHistoryDeleteLoading] = useState(false);
+  const [historyFormStatus, setHistoryFormStatus] = useState(null);
+  const [historyFilterStartDate, setHistoryFilterStartDate] = useState("");
+  const [historyFilterEndDate, setHistoryFilterEndDate] = useState("");
+  const [selectedHistoryRecordIds, setSelectedHistoryRecordIds] = useState([]);
 
   useEffect(() => {
     const sensorRef = ref(db, "device1/sensorData");
@@ -146,6 +175,10 @@ function Dashboard({ user, onLocalDevLogout }) {
   };
 
   const toNumberOrNull = (value) => {
+    if (value === "" || value === null || value === undefined) {
+      return null;
+    }
+
     const parsed = Number(value);
     return Number.isNaN(parsed) ? null : parsed;
   };
@@ -192,6 +225,300 @@ function Dashboard({ user, onLocalDevLogout }) {
     calculatedRecommendation !== "WAITING_FOR_SENSOR_DATA"
       ? calculatedRecommendation
       : decisionData?.recommendation || "WAITING_FOR_SENSOR_DATA";
+
+  const liveHumidity = toNumberOrNull(displaySensorData?.humidity);
+
+  const getAutomatedHistoryDecision = ({
+    recordAirTemp,
+    recordLeafTemp,
+    recordSoilMoisture,
+    recordLight,
+  }) => {
+    const normalizedRecordLight =
+      typeof recordLight === "string" ? recordLight.toUpperCase() : "";
+    const recordDeltaT =
+      recordAirTemp !== null && recordLeafTemp !== null
+        ? roundToOneDecimal(recordLeafTemp - recordAirTemp)
+        : null;
+
+    if (recordSoilMoisture === null || !normalizedRecordLight) {
+      return {
+        deltaT: recordDeltaT,
+        plantStatus: "--",
+        recommendation: "WAITING_FOR_SENSOR_DATA",
+      };
+    }
+
+    const recordHasLowSoilMoisture =
+      recordSoilMoisture < LOW_SOIL_MOISTURE_THRESHOLD;
+    const recordHasNightLight = normalizedRecordLight === "NIGHT";
+
+    if (recordHasLowSoilMoisture && recordHasNightLight) {
+      return {
+        deltaT: recordDeltaT,
+        plantStatus: "Needs Water",
+        recommendation: "WATER_NOW",
+      };
+    }
+
+    if (recordHasLowSoilMoisture) {
+      return {
+        deltaT: recordDeltaT,
+        plantStatus: "Needs Water",
+        recommendation: "WAIT_UNTIL_NIGHT",
+      };
+    }
+
+    return {
+      deltaT: recordDeltaT,
+      plantStatus: "Moisture OK",
+      recommendation: "NO_IRRIGATION_NEEDED",
+    };
+  };
+
+  const getHistoryFormDecisionPreview = (form, useLiveSensorValues) =>
+    getAutomatedHistoryDecision({
+      recordAirTemp: useLiveSensorValues ? airTemp : toNumberOrNull(form?.airTemp),
+      recordLeafTemp: useLiveSensorValues
+        ? leafTemp
+        : toNumberOrNull(form?.leafTemp),
+      recordSoilMoisture: toNumberOrNull(form?.soilMoisture),
+      recordLight: form?.light,
+    });
+
+  const buildHistoryRecordPayload = ({
+    form,
+    useLiveSensorValues,
+    currentRecord,
+  }) => {
+    const timestamp = new Date(form.timestamp).getTime();
+    const recordAirTemp = useLiveSensorValues
+      ? airTemp
+      : toNumberOrNull(form.airTemp);
+    const recordLeafTemp = useLiveSensorValues
+      ? leafTemp
+      : toNumberOrNull(form.leafTemp);
+    const recordHumidity = useLiveSensorValues
+      ? liveHumidity
+      : toNumberOrNull(form.humidity);
+    const recordSoilMoisture = toNumberOrNull(form.soilMoisture);
+    const recordLight = String(form.light || "").trim().toUpperCase();
+    const recordPump = String(form.pump || "").trim().toUpperCase();
+
+    if (Number.isNaN(timestamp)) {
+      throw new Error("Choose a valid date and time.");
+    }
+
+    if (
+      recordAirTemp === null ||
+      recordLeafTemp === null ||
+      recordHumidity === null
+    ) {
+      throw new Error(
+        useLiveSensorValues
+          ? "Live air temperature, leaf temperature, and humidity are needed before adding a record."
+          : "Air temperature, leaf temperature, and humidity are required.",
+      );
+    }
+
+    if (recordSoilMoisture === null) {
+      throw new Error("Soil moisture is required.");
+    }
+
+    if (!recordLight) {
+      throw new Error("Choose a light value.");
+    }
+
+    if (recordPump !== "ON" && recordPump !== "OFF") {
+      throw new Error("Pump must be ON or OFF.");
+    }
+
+    const automatedDecision = getAutomatedHistoryDecision({
+      recordAirTemp,
+      recordLeafTemp,
+      recordSoilMoisture,
+      recordLight,
+    });
+    const recordPayload = {
+      airTemp: recordAirTemp,
+      deltaT: automatedDecision.deltaT,
+      humidity: recordHumidity,
+      leafTemp: recordLeafTemp,
+      light: recordLight,
+      plantStatus: automatedDecision.plantStatus,
+      pump: recordPump,
+      recommendation: automatedDecision.recommendation,
+      soilMoisture: recordSoilMoisture,
+      timestamp,
+    };
+
+    if (!currentRecord) {
+      return recordPayload;
+    }
+
+    const { id: _id, ...savedRecord } = currentRecord;
+    return {
+      ...savedRecord,
+      ...recordPayload,
+    };
+  };
+
+  const handleNewHistoryFormChange = (field, value) => {
+    setNewHistoryForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  };
+
+  const handleEditHistoryFormChange = (field, value) => {
+    setEditHistoryForm((currentForm) => ({
+      ...currentForm,
+      [field]: value,
+    }));
+  };
+
+  const handleAddHistoryRecord = async (event) => {
+    event.preventDefault();
+    setHistorySaveLoading(true);
+    setHistoryFormStatus(null);
+
+    try {
+      const payload = buildHistoryRecordPayload({
+        form: newHistoryForm,
+        useLiveSensorValues: true,
+      });
+      const newHistoryRef = push(ref(db, "device1/history"));
+
+      await set(newHistoryRef, payload);
+      setNewHistoryForm({
+        timestamp: getDateTimeInputValue(),
+        soilMoisture: "",
+        light: payload.light,
+        pump: payload.pump,
+      });
+      setHistoryFormStatus({
+        type: "success",
+        message: "History record added to Firebase.",
+      });
+    } catch (error) {
+      setHistoryFormStatus({
+        type: "error",
+        message: error.message || "Failed to add history record.",
+      });
+      console.error("Failed to add history record:", error);
+    } finally {
+      setHistorySaveLoading(false);
+    }
+  };
+
+  const handleStartEditHistoryRecord = (record) => {
+    setEditingRecordId(record.id);
+    setEditHistoryForm({
+      timestamp: getDateTimeInputValue(record.timestamp),
+      airTemp: record.airTemp ?? "",
+      leafTemp: record.leafTemp ?? "",
+      humidity: record.humidity ?? "",
+      soilMoisture: record.soilMoisture ?? "",
+      light: record.light || "BRIGHT",
+      pump: String(record.pump ?? record.pumpStatus ?? "OFF").toUpperCase(),
+    });
+    setHistoryFormStatus(null);
+  };
+
+  const handleCancelEditHistoryRecord = () => {
+    setEditingRecordId(null);
+    setEditHistoryForm(null);
+    setHistoryFormStatus(null);
+  };
+
+  const handleSaveHistoryRecord = async (event, record) => {
+    event.preventDefault();
+    setHistorySaveLoading(true);
+    setHistoryFormStatus(null);
+
+    try {
+      const payload = buildHistoryRecordPayload({
+        form: editHistoryForm,
+        useLiveSensorValues: false,
+        currentRecord: record,
+      });
+
+      await set(ref(db, `device1/history/${record.id}`), payload);
+      setEditingRecordId(null);
+      setEditHistoryForm(null);
+      setHistoryFormStatus({
+        type: "success",
+        message: "History record updated in Firebase.",
+      });
+    } catch (error) {
+      setHistoryFormStatus({
+        type: "error",
+        message: error.message || "Failed to update history record.",
+      });
+      console.error("Failed to update history record:", error);
+    } finally {
+      setHistorySaveLoading(false);
+    }
+  };
+
+  const deleteHistoryRecords = async (recordIds, successMessage) => {
+    if (recordIds.length === 0) {
+      return;
+    }
+
+    setHistoryDeleteLoading(true);
+    setHistoryFormStatus(null);
+
+    try {
+      const updates = recordIds.reduce((nextUpdates, recordId) => {
+        nextUpdates[`device1/history/${recordId}`] = null;
+        return nextUpdates;
+      }, {});
+
+      await update(ref(db), updates);
+      setSelectedHistoryRecordIds((currentIds) =>
+        currentIds.filter((recordId) => !recordIds.includes(recordId)),
+      );
+
+      if (recordIds.includes(editingRecordId)) {
+        setEditingRecordId(null);
+        setEditHistoryForm(null);
+      }
+
+      setHistoryFormStatus({
+        type: "success",
+        message: successMessage,
+      });
+    } catch (error) {
+      setHistoryFormStatus({
+        type: "error",
+        message: error.message || "Failed to delete history record.",
+      });
+      console.error("Failed to delete history record:", error);
+    } finally {
+      setHistoryDeleteLoading(false);
+    }
+  };
+
+  const handleDeleteHistoryRecord = async (record) => {
+    const shouldDelete = window.confirm(
+      "Delete this history record from Firebase?",
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    await deleteHistoryRecords([record.id], "History record deleted from Firebase.");
+  };
+
+  const handleToggleHistoryRecordSelection = (recordId) => {
+    setSelectedHistoryRecordIds((currentIds) =>
+      currentIds.includes(recordId)
+        ? currentIds.filter((currentId) => currentId !== recordId)
+        : [...currentIds, recordId],
+    );
+  };
 
   useEffect(() => {
     const syncDecisionAndAutoPump = async () => {
@@ -289,6 +616,27 @@ function Dashboard({ user, onLocalDevLogout }) {
       .join(" ");
   };
 
+  const lightOptions = Array.from(
+    new Set(
+      [
+        ...DEFAULT_LIGHT_OPTIONS,
+        sensorData?.light,
+        newHistoryForm.light,
+        editHistoryForm?.light,
+        ...historyRecords.map((record) => record.light),
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toUpperCase()),
+    ),
+  );
+  const newHistoryDecisionPreview = getHistoryFormDecisionPreview(
+    newHistoryForm,
+    true,
+  );
+  const editHistoryDecisionPreview = editHistoryForm
+    ? getHistoryFormDecisionPreview(editHistoryForm, false)
+    : null;
+
   const dayTabs = [
     { value: 1, label: "Monday", offset: 0 },
     { value: 2, label: "Tuesday", offset: 1 },
@@ -313,6 +661,128 @@ function Dashboard({ user, onLocalDevLogout }) {
 
     const date = new Date(timestamp);
     return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const getDateFilterBoundary = (dateValue, isEndOfDay = false) => {
+    if (!dateValue) {
+      return null;
+    }
+
+    const date = new Date(`${dateValue}T00:00:00`);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    if (isEndOfDay) {
+      date.setHours(23, 59, 59, 999);
+    }
+
+    return date;
+  };
+
+  const historyFilterStart = getDateFilterBoundary(historyFilterStartDate);
+  const historyFilterEnd = getDateFilterBoundary(historyFilterEndDate, true);
+  const hasHistoryDateFilter = Boolean(historyFilterStart || historyFilterEnd);
+  const filteredHistoryRecords = historyRecords.filter((record) => {
+    const recordDate = getRecordDate(record.timestamp);
+
+    if ((historyFilterStart || historyFilterEnd) && !recordDate) {
+      return false;
+    }
+
+    if (historyFilterStart && recordDate < historyFilterStart) {
+      return false;
+    }
+
+    if (historyFilterEnd && recordDate > historyFilterEnd) {
+      return false;
+    }
+
+    return true;
+  });
+  const filteredHistoryRecordIds = filteredHistoryRecords.map((record) => record.id);
+  const filteredHistoryRecordKey = filteredHistoryRecordIds.join("|");
+  const filteredHistoryRecordIdSet = new Set(filteredHistoryRecordIds);
+  const selectedFilteredHistoryRecordIds = selectedHistoryRecordIds.filter(
+    (recordId) => filteredHistoryRecordIdSet.has(recordId),
+  );
+  const isEveryFilteredHistoryRecordSelected =
+    filteredHistoryRecordIds.length > 0 &&
+    selectedFilteredHistoryRecordIds.length === filteredHistoryRecordIds.length;
+  const displayedHistoryRecords = filteredHistoryRecords;
+
+  useEffect(() => {
+    const visibleRecordIds = new Set(
+      filteredHistoryRecordKey ? filteredHistoryRecordKey.split("|") : [],
+    );
+
+    setSelectedHistoryRecordIds((currentIds) =>
+      currentIds.filter((recordId) => visibleRecordIds.has(recordId)),
+    );
+  }, [filteredHistoryRecordKey]);
+
+  const handleToggleAllFilteredHistoryRecords = () => {
+    setSelectedHistoryRecordIds((currentIds) => {
+      if (isEveryFilteredHistoryRecordSelected) {
+        return currentIds.filter(
+          (recordId) => !filteredHistoryRecordIdSet.has(recordId),
+        );
+      }
+
+      return Array.from(new Set([...currentIds, ...filteredHistoryRecordIds]));
+    });
+  };
+
+  const handleDeleteSelectedHistoryRecords = async () => {
+    if (selectedFilteredHistoryRecordIds.length === 0) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      `Delete ${selectedFilteredHistoryRecordIds.length} selected history record${
+        selectedFilteredHistoryRecordIds.length === 1 ? "" : "s"
+      } from Firebase?`,
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    await deleteHistoryRecords(
+      selectedFilteredHistoryRecordIds,
+      `${selectedFilteredHistoryRecordIds.length} selected history record${
+        selectedFilteredHistoryRecordIds.length === 1 ? "" : "s"
+      } deleted from Firebase.`,
+    );
+  };
+
+  const handleDeleteFilteredHistoryRecords = async () => {
+    if (filteredHistoryRecordIds.length === 0) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      `Delete all ${filteredHistoryRecordIds.length} ${
+        hasHistoryDateFilter ? "filtered" : "visible"
+      } history record${filteredHistoryRecordIds.length === 1 ? "" : "s"} from Firebase?`,
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    await deleteHistoryRecords(
+      filteredHistoryRecordIds,
+      `${filteredHistoryRecordIds.length} history record${
+        filteredHistoryRecordIds.length === 1 ? "" : "s"
+      } deleted from Firebase.`,
+    );
+  };
+
+  const handleClearHistoryFilters = () => {
+    setHistoryFilterStartDate("");
+    setHistoryFilterEndDate("");
   };
 
   const getHistoryWindowBaseDate = (date) => {
@@ -915,10 +1385,21 @@ function Dashboard({ user, onLocalDevLogout }) {
                 Records and daily graphs from `device1/history`.
               </p>
             </div>
-            <span className="status-pill">
-              {historyRecords.length} total{" "}
-              {historyRecords.length === 1 ? "record" : "records"}
-            </span>
+            <div className="history-header-actions">
+              <button
+                className="secondary-button history-tools-toggle"
+                type="button"
+                onClick={() =>
+                  setShowHistoryManagementFeatures((currentValue) => !currentValue)
+                }
+              >
+                {showHistoryManagementFeatures ? "Hide Tools" : "Show Tools"}
+              </button>
+              <span className="status-pill">
+                {historyRecords.length} total{" "}
+                {historyRecords.length === 1 ? "record" : "records"}
+              </span>
+            </div>
           </div>
 
           <div className="tab-row" role="tablist" aria-label="History views">
@@ -943,63 +1424,574 @@ function Dashboard({ user, onLocalDevLogout }) {
           </div>
 
           {activeHistoryTab === "records" ? (
-            historyRecords.length > 0 ? (
-            <div className="history-list">
-              {historyRecords.map((record) => (
-                <div className="info-panel" key={record.id}>
-                  <p className="panel-label">Timestamp</p>
-                  <p className="panel-value">
-                    {formatTimestamp(record.timestamp)}
-                  </p>
-
-                  <div className="history-meta">
+            <div className="history-records-panel">
+              {showHistoryManagementFeatures ? (
+                <form className="history-form info-panel" onSubmit={handleAddHistoryRecord}>
+                  <div className="history-record-heading">
                     <div>
-                      <p className="panel-label">Air Temp</p>
-                      <p className="panel-value">{record.airTemp ?? "--"} °C</p>
-                    </div>
-
-                    <div>
-                      <p className="panel-label">Leaf Temp</p>
-                      <p className="panel-value">{record.leafTemp ?? "--"} °C</p>
-                    </div>
-
-                    <div>
-                      <p className="panel-label">Humidity</p>
-                      <p className="panel-value">{record.humidity ?? "--"} %</p>
-                    </div>
-
-                    <div>
-                      <p className="panel-label">Soil Moisture</p>
-                      <p className="panel-value">
-                        {record.soilMoisture ?? "--"} %
+                      <p className="panel-label">Add History Record</p>
+                      <p className="panel-subvalue">
+                        Air temperature, leaf temperature, and humidity use the live
+                        sensor values.
                       </p>
                     </div>
+                    <span className="status-pill">New data</span>
+                  </div>
 
-                    <div>
-                      <p className="panel-label">Light</p>
-                      <p className="panel-value">{record.light ?? "--"}</p>
+                  <div className="history-form-grid">
+                    <div className="field-group">
+                      <label className="field-label" htmlFor="new-history-timestamp">
+                        Date and time
+                      </label>
+                      <input
+                        className="field-input"
+                        id="new-history-timestamp"
+                        type="datetime-local"
+                        value={newHistoryForm.timestamp}
+                        onChange={(event) =>
+                          handleNewHistoryFormChange("timestamp", event.target.value)
+                        }
+                        required
+                      />
                     </div>
 
-                    <div>
-                      <p className="panel-label">Pump</p>
-                      <p className="panel-value">{record.pump ?? "--"}</p>
+                    <div className="field-group">
+                      <label className="field-label" htmlFor="new-history-soil">
+                        Soil moisture
+                      </label>
+                      <input
+                        className="field-input"
+                        id="new-history-soil"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        type="number"
+                        value={newHistoryForm.soilMoisture}
+                        onChange={(event) =>
+                          handleNewHistoryFormChange(
+                            "soilMoisture",
+                            event.target.value,
+                          )
+                        }
+                        required
+                      />
                     </div>
 
-                    <div className="info-panel-wide">
-                      <p className="panel-label">Recommendation</p>
-                      <p className="panel-value">
-                        {formatRecommendation(record.recommendation)}
-                      </p>
-                    </div>
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="new-history-light">
+                      Light
+                    </label>
+                    <select
+                      className="field-input"
+                      id="new-history-light"
+                      value={newHistoryForm.light}
+                      onChange={(event) =>
+                        handleNewHistoryFormChange("light", event.target.value)
+                      }
+                      required
+                    >
+                      {lightOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="new-history-pump">
+                      Pump
+                    </label>
+                    <select
+                      className="field-input"
+                      id="new-history-pump"
+                      value={newHistoryForm.pump}
+                      onChange={(event) =>
+                        handleNewHistoryFormChange("pump", event.target.value)
+                      }
+                      required
+                    >
+                      <option value="OFF">OFF</option>
+                      <option value="ON">ON</option>
+                    </select>
+                  </div>
+
+                  <div className="locked-field">
+                    <p className="panel-label">Live Air Temp</p>
+                    <p className="panel-value">
+                      {airTemp !== null ? `${airTemp} °C` : "--"}
+                    </p>
+                  </div>
+
+                  <div className="locked-field">
+                    <p className="panel-label">Live Leaf Temp</p>
+                    <p className="panel-value">
+                      {leafTemp !== null ? `${leafTemp} °C` : "--"}
+                    </p>
+                  </div>
+
+                  <div className="locked-field">
+                    <p className="panel-label">Live Humidity</p>
+                    <p className="panel-value">
+                      {liveHumidity !== null ? `${liveHumidity} %` : "--"}
+                    </p>
+                  </div>
+
+                  <div className="locked-field locked-field-accent">
+                    <p className="panel-label">Auto Recommendation</p>
+                    <p className="panel-value">
+                      {formatRecommendation(newHistoryDecisionPreview.recommendation)}
+                    </p>
+                    <p className="panel-subvalue">
+                      Delta T:{" "}
+                      {newHistoryDecisionPreview.deltaT !== null
+                        ? `${newHistoryDecisionPreview.deltaT.toFixed(1)} °C`
+                        : "--"}
+                    </p>
                   </div>
                 </div>
-              ))}
-            </div>
-            ) : (
-              <div className="info-panel">
-                <p className="panel-value">No history records available yet.</p>
+
+                {historyFormStatus ? (
+                  <p className={`form-message form-message-${historyFormStatus.type}`}>
+                    {historyFormStatus.message}
+                  </p>
+                ) : null}
+
+                <div className="actions-row">
+                  <button
+                    className="primary-button"
+                    type="submit"
+                    disabled={historySaveLoading}
+                  >
+                    {historySaveLoading ? "Saving..." : "Add to History"}
+                  </button>
+                </div>
+                </form>
+              ) : null}
+
+              <div className="history-toolbar info-panel">
+                <div className="history-filter-grid">
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="history-filter-start">
+                      From date
+                    </label>
+                    <input
+                      className="field-input"
+                      id="history-filter-start"
+                      type="date"
+                      value={historyFilterStartDate}
+                      onChange={(event) =>
+                        setHistoryFilterStartDate(event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="history-filter-end">
+                      To date
+                    </label>
+                    <input
+                      className="field-input"
+                      id="history-filter-end"
+                      type="date"
+                      value={historyFilterEndDate}
+                      onChange={(event) =>
+                        setHistoryFilterEndDate(event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="history-toolbar-summary">
+                    <p className="panel-label">Filtered Records</p>
+                    <p className="panel-value">
+                      {filteredHistoryRecords.length} / {historyRecords.length}
+                    </p>
+                    {showHistoryManagementFeatures ? (
+                      <p className="panel-subvalue">
+                        {selectedFilteredHistoryRecordIds.length} selected
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="history-bulk-actions">
+                  {showHistoryManagementFeatures ? (
+                    <label className="history-select-control">
+                      <input
+                        type="checkbox"
+                        checked={isEveryFilteredHistoryRecordSelected}
+                        onChange={handleToggleAllFilteredHistoryRecords}
+                        disabled={
+                          filteredHistoryRecords.length === 0 || historyDeleteLoading
+                        }
+                      />
+                      <span>Select all filtered</span>
+                    </label>
+                  ) : null}
+
+                  <div className="actions-row history-toolbar-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={handleClearHistoryFilters}
+                      disabled={!hasHistoryDateFilter || historyDeleteLoading}
+                    >
+                      Clear Filter
+                    </button>
+                    {showHistoryManagementFeatures ? (
+                      <>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={handleDeleteSelectedHistoryRecords}
+                          disabled={
+                            selectedFilteredHistoryRecordIds.length === 0 ||
+                            historyDeleteLoading
+                          }
+                        >
+                          Delete Selected
+                        </button>
+                        <button
+                          className="danger-button danger-button-strong"
+                          type="button"
+                          onClick={handleDeleteFilteredHistoryRecords}
+                          disabled={
+                            filteredHistoryRecords.length === 0 ||
+                            historyDeleteLoading
+                          }
+                        >
+                          {hasHistoryDateFilter ? "Delete Filtered" : "Delete All"}
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-            )
+
+              {historyRecords.length > 0 ? (
+                displayedHistoryRecords.length > 0 ? (
+                <div className="history-list">
+                  {displayedHistoryRecords.map((record) => (
+                    <div className="info-panel" key={record.id}>
+                      {showHistoryManagementFeatures ? (
+                        <div className="history-record-heading">
+                          <div className="history-record-title">
+                            <label className="history-select-control">
+                              <input
+                                type="checkbox"
+                                checked={selectedHistoryRecordIds.includes(record.id)}
+                                onChange={() =>
+                                  handleToggleHistoryRecordSelection(record.id)
+                                }
+                                disabled={historyDeleteLoading}
+                              />
+                              <span>
+                                <span className="panel-label">Timestamp</span>
+                                <span className="panel-value">
+                                  {formatTimestamp(record.timestamp)}
+                                </span>
+                              </span>
+                            </label>
+                          </div>
+
+                          <div className="history-record-actions">
+                            <button
+                              className="secondary-button history-edit-button"
+                              type="button"
+                              onClick={() => handleStartEditHistoryRecord(record)}
+                              disabled={historyDeleteLoading}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="danger-button history-edit-button"
+                              type="button"
+                              onClick={() => handleDeleteHistoryRecord(record)}
+                              disabled={historyDeleteLoading}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="panel-label">Timestamp</p>
+                          <p className="panel-value">
+                            {formatTimestamp(record.timestamp)}
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="history-meta">
+                        <div>
+                          <p className="panel-label">Air Temp</p>
+                          <p className="panel-value">{record.airTemp ?? "--"} °C</p>
+                        </div>
+
+                        <div>
+                          <p className="panel-label">Leaf Temp</p>
+                          <p className="panel-value">{record.leafTemp ?? "--"} °C</p>
+                        </div>
+
+                        <div>
+                          <p className="panel-label">Humidity</p>
+                          <p className="panel-value">{record.humidity ?? "--"} %</p>
+                        </div>
+
+                        <div>
+                          <p className="panel-label">Soil Moisture</p>
+                          <p className="panel-value">
+                            {record.soilMoisture ?? "--"} %
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="panel-label">Light</p>
+                          <p className="panel-value">{record.light ?? "--"}</p>
+                        </div>
+
+                        <div>
+                          <p className="panel-label">Pump</p>
+                          <p className="panel-value">{record.pump ?? "--"}</p>
+                        </div>
+
+                        <div className="info-panel-wide">
+                          <p className="panel-label">Recommendation</p>
+                          <p className="panel-value">
+                            {formatRecommendation(record.recommendation)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {showHistoryManagementFeatures &&
+                      editingRecordId === record.id &&
+                      editHistoryForm ? (
+                        <form
+                          className="history-form history-edit-form"
+                          onSubmit={(event) => handleSaveHistoryRecord(event, record)}
+                        >
+                          <div className="history-form-grid">
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-timestamp-${record.id}`}
+                              >
+                                Date and time
+                              </label>
+                              <input
+                                className="field-input"
+                                id={`edit-history-timestamp-${record.id}`}
+                                type="datetime-local"
+                                value={editHistoryForm.timestamp}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "timestamp",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              />
+                            </div>
+
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-air-${record.id}`}
+                              >
+                                Air temperature
+                              </label>
+                              <input
+                                className="field-input"
+                                id={`edit-history-air-${record.id}`}
+                                step="0.1"
+                                type="number"
+                                value={editHistoryForm.airTemp}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "airTemp",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              />
+                            </div>
+
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-leaf-${record.id}`}
+                              >
+                                Leaf temperature
+                              </label>
+                              <input
+                                className="field-input"
+                                id={`edit-history-leaf-${record.id}`}
+                                step="0.1"
+                                type="number"
+                                value={editHistoryForm.leafTemp}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "leafTemp",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              />
+                            </div>
+
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-humidity-${record.id}`}
+                              >
+                                Humidity
+                              </label>
+                              <input
+                                className="field-input"
+                                id={`edit-history-humidity-${record.id}`}
+                                min="0"
+                                max="100"
+                                step="0.1"
+                                type="number"
+                                value={editHistoryForm.humidity}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "humidity",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              />
+                            </div>
+
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-soil-${record.id}`}
+                              >
+                                Soil moisture
+                              </label>
+                              <input
+                                className="field-input"
+                                id={`edit-history-soil-${record.id}`}
+                                min="0"
+                                max="100"
+                                step="0.1"
+                                type="number"
+                                value={editHistoryForm.soilMoisture}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "soilMoisture",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              />
+                            </div>
+
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-light-${record.id}`}
+                              >
+                                Light
+                              </label>
+                              <select
+                                className="field-input"
+                                id={`edit-history-light-${record.id}`}
+                                value={editHistoryForm.light}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "light",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              >
+                                {lightOptions.map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="field-group">
+                              <label
+                                className="field-label"
+                                htmlFor={`edit-history-pump-${record.id}`}
+                              >
+                                Pump
+                              </label>
+                              <select
+                                className="field-input"
+                                id={`edit-history-pump-${record.id}`}
+                                value={editHistoryForm.pump}
+                                onChange={(event) =>
+                                  handleEditHistoryFormChange(
+                                    "pump",
+                                    event.target.value,
+                                  )
+                                }
+                                required
+                              >
+                                <option value="OFF">OFF</option>
+                                <option value="ON">ON</option>
+                              </select>
+                            </div>
+
+                            <div className="locked-field locked-field-accent">
+                              <p className="panel-label">Auto Recommendation</p>
+                              <p className="panel-value">
+                                {formatRecommendation(
+                                  editHistoryDecisionPreview?.recommendation,
+                                )}
+                              </p>
+                              <p className="panel-subvalue">
+                                Delta T:{" "}
+                                {editHistoryDecisionPreview?.deltaT !== null &&
+                                editHistoryDecisionPreview?.deltaT !== undefined
+                                  ? `${editHistoryDecisionPreview.deltaT.toFixed(1)} °C`
+                                  : "--"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="actions-row">
+                            <button
+                              className="primary-button"
+                              type="submit"
+                              disabled={historySaveLoading}
+                            >
+                              {historySaveLoading ? "Saving..." : "Save Changes"}
+                            </button>
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={handleCancelEditHistoryRecord}
+                              disabled={historySaveLoading}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+                ) : (
+                  <div className="info-panel">
+                    <p className="panel-value">
+                      No history records match the selected date filter.
+                    </p>
+                  </div>
+                )
+              ) : (
+                <div className="info-panel">
+                  <p className="panel-value">No history records available yet.</p>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="history-graph-panel">
               <div className="graph-control-group">

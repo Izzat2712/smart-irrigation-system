@@ -158,7 +158,8 @@
 
 .primary-button,
 .secondary-button,
-.ghost-button {
+.ghost-button,
+.danger-button {
   border-radius: 18px;
   padding: 14px 20px;
   font: inherit;
@@ -196,9 +197,25 @@
   box-shadow: 0 14px 34px rgba(18, 40, 27, 0.18);
 }
 
+.danger-button {
+  width: auto;
+  background: rgba(255, 239, 239, 0.96);
+  color: #a33b3b;
+  border: 1px solid rgba(214, 106, 106, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.danger-button-strong {
+  background: linear-gradient(135deg, #c84d4d, #e86e6e);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 16px 34px rgba(200, 77, 77, 0.24);
+}
+
 .primary-button:hover,
 .secondary-button:hover,
-.ghost-button:hover {
+.ghost-button:hover,
+.danger-button:hover {
   transform: translateY(-2px);
 }
 
@@ -215,9 +232,15 @@
   box-shadow: 0 18px 40px rgba(18, 40, 27, 0.24);
 }
 
+.danger-button:hover {
+  border-color: rgba(192, 75, 75, 0.62);
+  box-shadow: 0 14px 30px rgba(200, 77, 77, 0.12);
+}
+
 .primary-button:disabled,
 .secondary-button:disabled,
-.ghost-button:disabled {
+.ghost-button:disabled,
+.danger-button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
   transform: none;
@@ -501,6 +524,150 @@
   gap: 16px;
 }
 
+.history-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-tools-toggle {
+  width: auto;
+  min-width: 118px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 0.86rem;
+}
+
+.history-records-panel,
+.history-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.history-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.history-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.history-toolbar-summary {
+  min-height: 86px;
+  padding: 14px 16px;
+  border: 1px solid rgba(190, 210, 197, 0.72);
+  border-radius: 18px;
+  background: rgba(237, 244, 239, 0.74);
+}
+
+.history-bulk-actions,
+.history-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-toolbar-actions {
+  margin-top: 0;
+}
+
+.history-record-actions {
+  justify-content: flex-end;
+}
+
+.history-record-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-record-title {
+  min-width: 220px;
+}
+
+.history-select-control {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #2d4736;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.history-select-control input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  accent-color: #268a54;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.history-select-control input:disabled {
+  cursor: not-allowed;
+}
+
+.history-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+.history-edit-form {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(190, 210, 197, 0.74);
+}
+
+.history-edit-button {
+  width: auto;
+  min-width: 96px;
+}
+
+.locked-field {
+  min-height: 86px;
+  padding: 14px 16px;
+  border: 1px solid rgba(190, 210, 197, 0.72);
+  border-radius: 18px;
+  background: rgba(237, 244, 239, 0.74);
+}
+
+.locked-field-accent {
+  background: rgba(255, 247, 232, 0.88);
+  border-color: rgba(231, 187, 106, 0.5);
+}
+
+.form-message {
+  margin: 0;
+  padding: 13px 15px;
+  border-radius: 16px;
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+.form-message-success {
+  color: #23663f;
+  background: rgba(225, 245, 232, 0.92);
+  border: 1px solid rgba(92, 168, 113, 0.26);
+}
+
+.form-message-error {
+  color: #a13939;
+  background: rgba(255, 238, 238, 0.92);
+  border: 1px solid rgba(220, 123, 123, 0.26);
+}
+
 .history-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -684,6 +851,8 @@
   .ghost-button,
   .actions-row .primary-button,
   .actions-row .secondary-button,
+  .actions-row .danger-button,
+  .danger-button,
   .pump-button,
   .mode-button {
     width: 100%;
@@ -698,7 +867,17 @@
   }
 
   .tab-button,
-  .graph-select {
+  .graph-select,
+  .history-edit-button {
+    width: 100%;
+  }
+
+  .history-record-heading {
+    flex-direction: column;
+  }
+
+  .history-header-actions,
+  .history-tools-toggle {
     width: 100%;
   }
 }
