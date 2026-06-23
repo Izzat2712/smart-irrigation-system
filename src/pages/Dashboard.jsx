@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { onValue, ref, set } from "firebase/database";
@@ -19,6 +19,35 @@ const hasRealTimestamp = (timestamp) => {
   return !Number.isNaN(parsed) && parsed >= REAL_TIMESTAMP_MIN;
 };
 
+const getRecordDate = (timestamp) => {
+  if (!timestamp || isLegacyUptimeTimestamp(timestamp)) {
+    return null;
+  }
+
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getHistoryWindowBaseDate = (date) => {
+  const shiftedDate = new Date(date);
+  shiftedDate.setHours(shiftedDate.getHours() - 8);
+  return shiftedDate;
+};
+
+const addDays = (date, days) => {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+};
+
+const getWeekStart = (date) => {
+  const baseDate = getHistoryWindowBaseDate(date);
+  const mondayOffset = (baseDate.getDay() + 6) % 7;
+  const weekStart = addDays(baseDate, -mondayOffset);
+  weekStart.setHours(8, 0, 0, 0);
+  return weekStart;
+};
+
 function Dashboard({ user, onLocalDevLogout }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -30,6 +59,8 @@ function Dashboard({ user, onLocalDevLogout }) {
   const [historyRecords, setHistoryRecords] = useState([]);
   const [activeHistoryTab, setActiveHistoryTab] = useState("records");
   const [selectedHistoryDay, setSelectedHistoryDay] = useState(1);
+  const [selectedGraphWeekStartTime, setSelectedGraphWeekStartTime] =
+    useState(null);
   const [selectedGraphType, setSelectedGraphType] = useState("pump");
   const [historyFilterStartDate, setHistoryFilterStartDate] = useState("");
   const [historyFilterEndDate, setHistoryFilterEndDate] = useState("");
@@ -308,15 +339,6 @@ function Dashboard({ user, onLocalDevLogout }) {
     { value: "deltaT", label: "Delta T" },
   ];
 
-  const getRecordDate = (timestamp) => {
-    if (!timestamp || isLegacyUptimeTimestamp(timestamp)) {
-      return null;
-    }
-
-    const date = new Date(timestamp);
-    return Number.isNaN(date.getTime()) ? null : date;
-  };
-
   const getDateFilterBoundary = (dateTimeValue, isEndBoundary = false) => {
     if (!dateTimeValue) {
       return null;
@@ -366,29 +388,9 @@ function Dashboard({ user, onLocalDevLogout }) {
     setHistoryFilterEndDate("");
   };
 
-  const getHistoryWindowBaseDate = (date) => {
-    const shiftedDate = new Date(date);
-    shiftedDate.setHours(shiftedDate.getHours() - 8);
-    return shiftedDate;
-  };
-
   const getHistoryWindowHour = (date) => {
     const hour = date.getHours() + date.getMinutes() / 60;
     return hour >= 8 ? hour - 8 : hour + 16;
-  };
-
-  const addDays = (date, days) => {
-    const nextDate = new Date(date);
-    nextDate.setDate(nextDate.getDate() + days);
-    return nextDate;
-  };
-
-  const getWeekStart = (date) => {
-    const baseDate = getHistoryWindowBaseDate(date);
-    const mondayOffset = (baseDate.getDay() + 6) % 7;
-    const weekStart = addDays(baseDate, -mondayOffset);
-    weekStart.setHours(8, 0, 0, 0);
-    return weekStart;
   };
 
   const formatShortDate = (date) =>
@@ -453,14 +455,40 @@ function Dashboard({ user, onLocalDevLogout }) {
   const selectedGraph = graphTypes.find(
     (graphType) => graphType.value === selectedGraphType
   );
-  const validHistoryDates = historyRecords
-    .map((record) => getRecordDate(record.timestamp))
-    .filter(Boolean);
-  const latestHistoryDate =
-    validHistoryDates.length > 0
-      ? new Date(Math.max(...validHistoryDates.map((date) => date.getTime())))
-      : new Date();
-  const graphWeekStart = getWeekStart(latestHistoryDate);
+
+  const graphWeekOptions = useMemo(() => {
+    const weeksByStartTime = new Map();
+
+    historyRecords.forEach((record) => {
+      const date = getRecordDate(record.timestamp);
+
+      if (!date) {
+        return;
+      }
+
+      const weekStart = getWeekStart(date);
+      weeksByStartTime.set(weekStart.getTime(), weekStart);
+    });
+
+    const weeks = Array.from(weeksByStartTime.values()).sort(
+      (firstWeek, secondWeek) => secondWeek.getTime() - firstWeek.getTime(),
+    );
+
+    return weeks.length > 0 ? weeks : [getWeekStart(new Date())];
+  }, [historyRecords]);
+
+  const latestGraphWeekStart = graphWeekOptions[0];
+  const graphWeekStart = selectedGraphWeekStartTime
+    ? new Date(selectedGraphWeekStartTime)
+    : latestGraphWeekStart;
+  const graphWeekSelectOptions =
+    selectedGraphWeekStartTime &&
+    !graphWeekOptions.some(
+      (weekStart) => weekStart.getTime() === selectedGraphWeekStartTime,
+    )
+      ? [graphWeekStart, ...graphWeekOptions]
+      : graphWeekOptions;
+
   const datedDayTabs = dayTabs.map((day) => {
     const windowStart = addDays(graphWeekStart, day.offset);
     const windowEnd = addDays(windowStart, 1);
@@ -481,6 +509,17 @@ function Dashboard({ user, onLocalDevLogout }) {
         selectedHistoryDayTab.windowEnd
       )}`
     : "8:00 AM to next-day 8:00 AM";
+  const formatWeekRange = (weekStart) => {
+    const weekEnd = addDays(weekStart, 6);
+    const weekEndLabel = weekEnd.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+
+    return `${formatShortDate(weekStart)} to ${weekEndLabel}`;
+  };
+  const selectedGraphWeekLabel = formatWeekRange(graphWeekStart);
 
   const graphRecords = historyRecords
     .map((record) => {
@@ -608,7 +647,7 @@ function Dashboard({ user, onLocalDevLogout }) {
             className="history-chart"
             viewBox={`0 0 ${width} ${height}`}
             role="img"
-            aria-label={`${selectedGraph?.label} graph for ${selectedHistoryDayLabel}`}
+            aria-label={`${selectedGraph?.label} graph for ${selectedHistoryDayLabel}, week ${selectedGraphWeekLabel}`}
           >
             <line
               className="chart-axis"
@@ -717,7 +756,7 @@ function Dashboard({ user, onLocalDevLogout }) {
           </svg>
         ) : (
           <div className="chart-empty">
-            <p className="panel-value">No graph data for this day yet.</p>
+            <p className="panel-value">No graph data for this day in the selected week yet.</p>
             <p className="panel-subvalue">
               Records need valid timestamps and values for the selected graph.
             </p>
@@ -1112,41 +1151,72 @@ function Dashboard({ user, onLocalDevLogout }) {
             </div>
           ) : (
             <div className="history-graph-panel">
-              <div className="graph-control-group">
-                <p className="panel-label">Day</p>
-                <div className="tab-row tab-row-compact" role="tablist" aria-label="Graph days">
-                  {datedDayTabs.map((day) => (
-                    <button
-                      className={`tab-button ${selectedHistoryDay === day.value ? "tab-button-active" : ""}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={selectedHistoryDay === day.value}
-                      key={day.value}
-                      onClick={() => setSelectedHistoryDay(day.value)}
-                    >
-                      <span className="tab-button-main">{day.label}</span>
-                      <span className="tab-button-sub">{day.dateLabel}</span>
-                    </button>
-                  ))}
+              <div className="graph-control-grid">
+                <div className="graph-control-group">
+                  <label className="field-label" htmlFor="history-graph-week">
+                    Week
+                  </label>
+                  <select
+                    className="field-input graph-select"
+                    id="history-graph-week"
+                    value={
+                      selectedGraphWeekStartTime ?? latestGraphWeekStart.getTime()
+                    }
+                    onChange={(event) =>
+                      setSelectedGraphWeekStartTime(Number(event.target.value))
+                    }
+                  >
+                    {graphWeekSelectOptions.map((weekStart) => (
+                      <option
+                        key={weekStart.getTime()}
+                        value={weekStart.getTime()}
+                      >
+                        {formatWeekRange(weekStart)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </div>
 
-              <div className="graph-control-group">
-                <label className="field-label" htmlFor="history-graph-type">
-                  Graph
-                </label>
-                <select
-                  className="field-input graph-select"
-                  id="history-graph-type"
-                  value={selectedGraphType}
-                  onChange={(event) => setSelectedGraphType(event.target.value)}
-                >
-                  {graphTypes.map((graphType) => (
-                    <option key={graphType.value} value={graphType.value}>
-                      {graphType.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="graph-control-group">
+                  <label className="field-label" htmlFor="history-graph-type">
+                    Graph
+                  </label>
+                  <select
+                    className="field-input graph-select"
+                    id="history-graph-type"
+                    value={selectedGraphType}
+                    onChange={(event) => setSelectedGraphType(event.target.value)}
+                  >
+                    {graphTypes.map((graphType) => (
+                      <option key={graphType.value} value={graphType.value}>
+                        {graphType.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="graph-control-group graph-control-days">
+                  <p className="panel-label">Day</p>
+                  <div
+                    className="tab-row tab-row-compact"
+                    role="tablist"
+                    aria-label="Graph days"
+                  >
+                    {datedDayTabs.map((day) => (
+                      <button
+                        className={`tab-button ${selectedHistoryDay === day.value ? "tab-button-active" : ""}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={selectedHistoryDay === day.value}
+                        key={day.value}
+                        onClick={() => setSelectedHistoryDay(day.value)}
+                      >
+                        <span className="tab-button-main">{day.label}</span>
+                        <span className="tab-button-sub">{day.dateLabel}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="graph-summary-grid">
@@ -1155,7 +1225,11 @@ function Dashboard({ user, onLocalDevLogout }) {
                   <p className="panel-value">
                     {selectedHistoryDayLabel} {selectedHistoryDayTab?.dateLabel}
                   </p>
-                  <p className="panel-subvalue">{selectedHistoryWindowLabel}</p>
+                  <p className="panel-subvalue">
+                    Week: {selectedGraphWeekLabel}
+                    <br />
+                    {selectedHistoryWindowLabel}
+                  </p>
                 </div>
 
                 <div className="info-panel">
