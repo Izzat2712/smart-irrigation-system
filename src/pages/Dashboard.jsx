@@ -31,6 +31,8 @@ function Dashboard({ user, onLocalDevLogout }) {
   const [activeHistoryTab, setActiveHistoryTab] = useState("records");
   const [selectedHistoryDay, setSelectedHistoryDay] = useState(1);
   const [selectedGraphType, setSelectedGraphType] = useState("pump");
+  const [historyFilterStartDate, setHistoryFilterStartDate] = useState("");
+  const [historyFilterEndDate, setHistoryFilterEndDate] = useState("");
 
   useEffect(() => {
     const sensorRef = ref(db, "device1/sensorData");
@@ -313,6 +315,50 @@ function Dashboard({ user, onLocalDevLogout }) {
 
     const date = new Date(timestamp);
     return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const getDateFilterBoundary = (dateValue, isEndOfDay = false) => {
+    if (!dateValue) {
+      return null;
+    }
+
+    const date = new Date(`${dateValue}T00:00:00`);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    if (isEndOfDay) {
+      date.setHours(23, 59, 59, 999);
+    }
+
+    return date;
+  };
+
+  const historyFilterStart = getDateFilterBoundary(historyFilterStartDate);
+  const historyFilterEnd = getDateFilterBoundary(historyFilterEndDate, true);
+  const hasHistoryDateFilter = Boolean(historyFilterStart || historyFilterEnd);
+  const filteredHistoryRecords = historyRecords.filter((record) => {
+    const recordDate = getRecordDate(record.timestamp);
+
+    if ((historyFilterStart || historyFilterEnd) && !recordDate) {
+      return false;
+    }
+
+    if (historyFilterStart && recordDate < historyFilterStart) {
+      return false;
+    }
+
+    if (historyFilterEnd && recordDate > historyFilterEnd) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const handleClearHistoryFilters = () => {
+    setHistoryFilterStartDate("");
+    setHistoryFilterEndDate("");
   };
 
   const getHistoryWindowBaseDate = (date) => {
@@ -943,9 +989,60 @@ function Dashboard({ user, onLocalDevLogout }) {
           </div>
 
           {activeHistoryTab === "records" ? (
-            historyRecords.length > 0 ? (
+            <div className="history-records-panel">
+              <div className="history-filter-panel info-panel">
+                <div className="history-filter-grid">
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="history-filter-start">
+                      From date
+                    </label>
+                    <input
+                      className="field-input"
+                      id="history-filter-start"
+                      type="date"
+                      value={historyFilterStartDate}
+                      onChange={(event) =>
+                        setHistoryFilterStartDate(event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label className="field-label" htmlFor="history-filter-end">
+                      To date
+                    </label>
+                    <input
+                      className="field-input"
+                      id="history-filter-end"
+                      type="date"
+                      value={historyFilterEndDate}
+                      onChange={(event) =>
+                        setHistoryFilterEndDate(event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="history-filter-summary">
+                    <p className="panel-label">Filtered Records</p>
+                    <p className="panel-value">
+                      {filteredHistoryRecords.length} / {historyRecords.length}
+                    </p>
+                    <button
+                      className="secondary-button history-filter-clear"
+                      type="button"
+                      onClick={handleClearHistoryFilters}
+                      disabled={!hasHistoryDateFilter}
+                    >
+                      Clear Filter
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {historyRecords.length > 0 ? (
+                filteredHistoryRecords.length > 0 ? (
             <div className="history-list">
-              {historyRecords.map((record) => (
+              {filteredHistoryRecords.map((record) => (
                 <div className="info-panel" key={record.id}>
                   <p className="panel-label">Timestamp</p>
                   <p className="panel-value">
@@ -995,11 +1092,19 @@ function Dashboard({ user, onLocalDevLogout }) {
                 </div>
               ))}
             </div>
+                ) : (
+                  <div className="info-panel">
+                    <p className="panel-value">
+                      No history records match the selected date filter.
+                    </p>
+                  </div>
+                )
             ) : (
               <div className="info-panel">
                 <p className="panel-value">No history records available yet.</p>
               </div>
-            )
+              )}
+            </div>
           ) : (
             <div className="history-graph-panel">
               <div className="graph-control-group">
