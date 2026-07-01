@@ -6,6 +6,8 @@ import { auth, db } from "../firebase";
 
 const REAL_TIMESTAMP_MIN = 946684800000;
 const LOW_SOIL_MOISTURE_THRESHOLD = 60;
+const HIGH_DELTA_T_THRESHOLD = 3;
+const DECISION_STAGE_STORAGE_KEY = "smart-irrigation-decision-stage";
 const DEFAULT_LIGHT_OPTIONS = ["NIGHT", "LOW_LIGHT", "BRIGHT", "STRONG_DAYLIGHT"];
 
 const getDateTimeInputValue = (timestamp = Date.now()) => {
@@ -91,6 +93,14 @@ function Dashboard({ user, onLocalDevLogout }) {
   const [historyFilterStartDate, setHistoryFilterStartDate] = useState("");
   const [historyFilterEndDate, setHistoryFilterEndDate] = useState("");
   const [selectedHistoryRecordIds, setSelectedHistoryRecordIds] = useState([]);
+  const [decisionStage, setDecisionStage] = useState(() => {
+    const savedStage =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(DECISION_STAGE_STORAGE_KEY)
+        : null;
+
+    return savedStage === "leafDevelopment" ? savedStage : "early";
+  });
 
   useEffect(() => {
     const sensorRef = ref(db, "device1/sensorData");
@@ -215,6 +225,10 @@ function Dashboard({ user, onLocalDevLogout }) {
   };
 
   const displaySensorData = sensorData;
+  const isLeafDevelopmentStage = decisionStage === "leafDevelopment";
+  const decisionStageLabel = isLeafDevelopmentStage
+    ? "Leaf Development"
+    : "Early Stage";
 
   const airTemp = toNumberOrNull(displaySensorData?.airTemp);
   const leafTemp = toNumberOrNull(displaySensorData?.leafTemp);
@@ -223,26 +237,33 @@ function Dashboard({ user, onLocalDevLogout }) {
     typeof displaySensorData?.light === "string" ? displaySensorData.light : null;
   const normalizedLight = light?.toUpperCase();
 
-  const hasDecisionInputs = soilMoisture !== null && Boolean(normalizedLight);
-
   const calculatedDeltaT =
     airTemp !== null && leafTemp !== null ? leafTemp - airTemp : null;
+  const hasBaseDecisionInputs = soilMoisture !== null && Boolean(normalizedLight);
+  const hasDecisionInputs =
+    hasBaseDecisionInputs && (!isLeafDevelopmentStage || calculatedDeltaT !== null);
   const isLowSoilMoisture =
     soilMoisture !== null ? soilMoisture < LOW_SOIL_MOISTURE_THRESHOLD : false;
   const isNightLight = normalizedLight === "NIGHT";
+  const isHighDeltaT =
+    calculatedDeltaT !== null ? calculatedDeltaT >= HIGH_DELTA_T_THRESHOLD : false;
 
   let calculatedPlantStatus = "--";
   let calculatedRecommendation = "WAITING_FOR_SENSOR_DATA";
 
-  if (hasDecisionInputs) {
+  if (hasBaseDecisionInputs) {
     calculatedPlantStatus = isLowSoilMoisture ? "Needs Water" : "Moisture OK";
 
-    if (isLowSoilMoisture && isNightLight) {
-      calculatedRecommendation = "WATER_NOW";
-    } else if (isLowSoilMoisture && !isNightLight) {
-      calculatedRecommendation = "WAIT_UNTIL_NIGHT";
-    } else {
-      calculatedRecommendation = "NO_IRRIGATION_NEEDED";
+    if (hasDecisionInputs) {
+      if (isLowSoilMoisture && isNightLight && (!isLeafDevelopmentStage || isHighDeltaT)) {
+        calculatedRecommendation = "WATER_NOW";
+      } else if (isLowSoilMoisture && !isNightLight) {
+        calculatedRecommendation = "WAIT_UNTIL_NIGHT";
+      } else if (isLowSoilMoisture && isLeafDevelopmentStage && !isHighDeltaT) {
+        calculatedRecommendation = "WAIT_FOR_DELTA_T";
+      } else {
+        calculatedRecommendation = "NO_IRRIGATION_NEEDED";
+      }
     }
   }
 
@@ -264,6 +285,7 @@ function Dashboard({ user, onLocalDevLogout }) {
     recordLeafTemp,
     recordSoilMoisture,
     recordLight,
+    recordStage = decisionStage,
   }) => {
     const normalizedRecordLight =
       typeof recordLight === "string" ? recordLight.toUpperCase() : "";
@@ -271,8 +293,13 @@ function Dashboard({ user, onLocalDevLogout }) {
       recordAirTemp !== null && recordLeafTemp !== null
         ? roundToOneDecimal(recordLeafTemp - recordAirTemp)
         : null;
+    const isRecordLeafDevelopmentStage = recordStage === "leafDevelopment";
 
-    if (recordSoilMoisture === null || !normalizedRecordLight) {
+    if (
+      recordSoilMoisture === null ||
+      !normalizedRecordLight ||
+      (isRecordLeafDevelopmentStage && recordDeltaT === null)
+    ) {
       return {
         deltaT: recordDeltaT,
         plantStatus: "--",
@@ -283,8 +310,14 @@ function Dashboard({ user, onLocalDevLogout }) {
     const recordHasLowSoilMoisture =
       recordSoilMoisture < LOW_SOIL_MOISTURE_THRESHOLD;
     const recordHasNightLight = normalizedRecordLight === "NIGHT";
+    const recordHasHighDeltaT =
+      recordDeltaT !== null ? recordDeltaT >= HIGH_DELTA_T_THRESHOLD : false;
 
-    if (recordHasLowSoilMoisture && recordHasNightLight) {
+    if (
+      recordHasLowSoilMoisture &&
+      recordHasNightLight &&
+      (!isRecordLeafDevelopmentStage || recordHasHighDeltaT)
+    ) {
       return {
         deltaT: recordDeltaT,
         plantStatus: "Needs Water",
@@ -293,6 +326,14 @@ function Dashboard({ user, onLocalDevLogout }) {
     }
 
     if (recordHasLowSoilMoisture) {
+      if (isRecordLeafDevelopmentStage && recordHasNightLight) {
+        return {
+          deltaT: recordDeltaT,
+          plantStatus: "Needs Water",
+          recommendation: "WAIT_FOR_DELTA_T",
+        };
+      }
+
       return {
         deltaT: recordDeltaT,
         plantStatus: "Needs Water",
@@ -315,6 +356,7 @@ function Dashboard({ user, onLocalDevLogout }) {
         : toNumberOrNull(form?.leafTemp),
       recordSoilMoisture: toNumberOrNull(form?.soilMoisture),
       recordLight: form?.light,
+      recordStage: decisionStage,
     });
 
   const buildHistoryRecordPayload = ({
@@ -369,6 +411,7 @@ function Dashboard({ user, onLocalDevLogout }) {
       recordLeafTemp,
       recordSoilMoisture,
       recordLight,
+      recordStage: decisionStage,
     });
     const recordPayload = {
       airTemp: recordAirTemp,
@@ -380,6 +423,7 @@ function Dashboard({ user, onLocalDevLogout }) {
       pump: recordPump,
       recommendation: automatedDecision.recommendation,
       soilMoisture: recordSoilMoisture,
+      stage: decisionStage,
       timestamp,
     };
 
@@ -552,6 +596,12 @@ function Dashboard({ user, onLocalDevLogout }) {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(DECISION_STAGE_STORAGE_KEY, decisionStage);
+    }
+  }, [decisionStage]);
+
+  useEffect(() => {
     const syncDecisionAndAutoPump = async () => {
       if (!hasDecisionInputs) {
         return;
@@ -561,6 +611,7 @@ function Dashboard({ user, onLocalDevLogout }) {
         await set(ref(db, "device1/decision"), {
           deltaT:
             calculatedDeltaT !== null ? Number(calculatedDeltaT.toFixed(1)) : null,
+          stage: decisionStage,
           plantStatus: calculatedPlantStatus,
           recommendation: calculatedRecommendation,
           timestamp: new Date().toISOString(),
@@ -585,6 +636,7 @@ function Dashboard({ user, onLocalDevLogout }) {
     calculatedPlantStatus,
     calculatedRecommendation,
     controlMode,
+    decisionStage,
     hasDecisionInputs,
     pumpStatus,
   ]);
@@ -1380,10 +1432,36 @@ function Dashboard({ user, onLocalDevLogout }) {
             <div>
               <h2 className="section-title">Smart Decision</h2>
               <p className="section-kicker">
-                Current recommendation is based on soil moisture and night time.
+                {isLeafDevelopmentStage
+                  ? "Current recommendation is based on soil moisture, night time, and Delta T."
+                  : "Current recommendation is based on soil moisture and night time."}
               </p>
             </div>
-            <span className="status-pill">{activePlantStatus}</span>
+            <div className="decision-header-actions">
+              <div
+                className="stage-switch"
+                role="group"
+                aria-label="Decision growth stage"
+              >
+                <button
+                  className={`stage-switch-button ${decisionStage === "early" ? "stage-switch-button-active" : ""}`}
+                  type="button"
+                  onClick={() => setDecisionStage("early")}
+                  aria-pressed={decisionStage === "early"}
+                >
+                  Early Stage
+                </button>
+                <button
+                  className={`stage-switch-button ${decisionStage === "leafDevelopment" ? "stage-switch-button-active" : ""}`}
+                  type="button"
+                  onClick={() => setDecisionStage("leafDevelopment")}
+                  aria-pressed={decisionStage === "leafDevelopment"}
+                >
+                  Leaf Development
+                </button>
+              </div>
+              <span className="status-pill">{activePlantStatus}</span>
+            </div>
           </div>
 
           <div className="dashboard-grid">
@@ -1392,17 +1470,27 @@ function Dashboard({ user, onLocalDevLogout }) {
               <p className="panel-value">
                 {activeDeltaT !== null ? `${activeDeltaT.toFixed(1)} °C` : "--"}
               </p>
-              <p className="panel-subvalue">Calculated as leafTemp - airTemp.</p>
+              <p className="panel-subvalue">
+                {isLeafDevelopmentStage
+                  ? `Leaf stage requires at least ${HIGH_DELTA_T_THRESHOLD.toFixed(1)} °C.`
+                  : "Calculated as leafTemp - airTemp."}
+              </p>
             </div>
 
             <div className="info-panel">
-              <p className="panel-label">Plant Status</p>
+              <p className="panel-label">{decisionStageLabel}</p>
               <p className="panel-value">{activePlantStatus}</p>
               <p className="panel-subvalue">
-                {hasDecisionInputs
+                {hasBaseDecisionInputs
                   ? isLowSoilMoisture
                     ? isNightLight
-                      ? `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}% and it is night.`
+                      ? isLeafDevelopmentStage
+                        ? calculatedDeltaT === null
+                          ? "Waiting for Delta T sensor data."
+                          : isHighDeltaT
+                            ? `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}%, it is night, and Delta T is high.`
+                            : `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}% and it is night, but Delta T is below ${HIGH_DELTA_T_THRESHOLD.toFixed(1)} °C.`
+                        : `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}% and it is night.`
                       : `Soil moisture is below ${LOW_SOIL_MOISTURE_THRESHOLD}%, waiting for night.`
                     : `Soil moisture is at least ${LOW_SOIL_MOISTURE_THRESHOLD}%.`
                   : "Using the latest saved decision from Firebase."}
